@@ -93,6 +93,8 @@
          to configure a local symbol repository.
          Examples: http://myserver.com/milstd2525/   (web server)
                    jar:file:milstd2525-symbols.zip!  (local zip archive)  -->
+    <!-- <Property name="gov.nasa.worldwind.avkey.MilStd2525IconRetrieverPath"
+              value="http://worldwind.arc.nasa.gov/milstd2525c/rev1/"/>-->
     <Property name="gov.nasa.worldwind.avkey.MilStd2525IconRetrieverPath"
-              value="http://worldwind.arc.nasa.gov/milstd2525c/rev1/"/>
+              value="resources/milstd2525c"/>
 </WorldWindConfiguration>
