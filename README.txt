@@ -61,9 +61,9 @@ New features and improvements in World Wind Java SDK 2.0.0
 ------------------------------------------------------------
 - See http://goworldwind.org/releases/ for a description of this release's major features.
 
-- Migrated World Wind's usage of the JOGL library to JOGL version 2.0.
-- Redesigned the World Wind Java Web Start site to work with JOGL 2.0 and Java 7 on all platforms..
-- Redesigned the World Wind Java applet examples to work with JOGL 2.0 and Java 7 on all platforms.
+- Migrated World Wind's usage of the JOGL library to JOGL version 2.1.4.
+- Redesigned the World Wind Java Web Start site to work with JOGL 2 and Java 7 on all platforms..
+- Redesigned the World Wind Java applet examples to work with JOGL 2 and Java 7 on all platforms.
   New applets leverage the same Java Web Start resources used by applications.
 - Redesigned the World Wind Java demos for simplicity, and consolidated all demo resources in a single place.
 - Added a new ANT target webstart.site that creates a self-contained and deployable World Wind Web Start site.
@@ -73,10 +73,6 @@ New features and improvements in World Wind Java SDK 2.0.0
   Moved the performance package into gov.nasa.worldwindx.performance.
 - Repaired a problem that caused the compass not to be displayed when another instance of the layer had been used in
   another WorldWindow.
-- Changed the meaning of passing null to the WorldWindowGLCanvas and WorldWindowGLJPanel constructors that have a
-  share-with argument to indicate that a null value causes the gpu resource cache not to be cleared when the window
-  is destroyed. This keeps its contents available to other windows that may have been opened and shared after the
-  initial one.
 - Added a method to the Terrain interface that identifies the input positions' altitude reference and converts the
   altitudes to relative-to-ground, which is what the intersection methods expect.
 - Updated TiledImageLayer, RectangularTessellator and SurfaceObjectTileBuilder to adjust their level of detail when the
