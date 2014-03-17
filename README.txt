@@ -82,8 +82,10 @@ New features and improvements in World Wind Java SDK 2.0.0
 - Fixed WWJ-371, where some portions of Collada shapes were not pickable.
 - Fixed WWJ-425, where terrain picking fails on VMware virtual desktops.
 - Fixed WWJ-433, where surface shapes crossing both the prime meridian and the anti-meridian display incorrectly.
+- Fixed WWJ-452, where surface shapes containing a pole draw an incorrect outline segment.
 - Fixed WWJ-443, where enabling stereo rendering on an unsupported GPU caused surface shape picking to fail without warning.
 - Fixed WWJ-449, which corrects the KML parser's interpretation of an unspecified altitudeMode.
+- Fixed WWJ-451, where LevelSet.getTileNumber overflows when the number of tiles is large.
 - Repaired non-scoped abstract method declaration in RigidShape class.
 - Added Angle formatting for degrees and decimal minutes. Added degrees and decimal minutes option to LatLonGraticule.
 - Modified shapefile loading to recognize the HGT attribute field as a height and create extruded polygons as a result.
@@ -91,6 +93,7 @@ New features and improvements in World Wind Java SDK 2.0.0
 - Repaired KML LineString but described in forum post http://forum.worldwindcentral.com/showthread.php?41174
 - Repaired bug described at http://issues.worldwind.arc.nasa.gov/jira/browse/WWJ-410
 - Added option to eliminate library loader replacement when initializing GDAL.
+- Added a base depth to ExtrudedPolygon to enable positioning of base vertices below the terrain.
 
   Note on using the JOGL libraries without the default runtime extraction of native binaries.
     This is accomplished by modifying World Wind's JOGL distribution to load native binaries directly from the library
