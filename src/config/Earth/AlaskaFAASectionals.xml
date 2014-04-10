@@ -7,22 +7,22 @@
 
 <!--$Id$-->
 <Layer version="1" layerType="TiledImageLayer">
-    <DisplayName>i-cubed Landsat</DisplayName>
+    <DisplayName>FAA Sectionals</DisplayName>
     <Service serviceName="OGC:WMS" version="1.3">
-        <GetCapabilitiesURL>http://worldwind25.arc.nasa.gov/wms</GetCapabilitiesURL>
-        <GetMapURL>http://worldwind25.arc.nasa.gov/wms</GetMapURL>
-        <LayerNames>BlueMarble-200405,esat</LayerNames>
+        <GetCapabilitiesURL>http://worldwind20.arc.nasa.gov/faachart</GetCapabilitiesURL>
+        <GetMapURL>http://worldwind20.arc.nasa.gov/faachart</GetMapURL>
+        <LayerNames>FAAchart</LayerNames>
     </Service>
     <RetrievePropertiesFromService>true</RetrievePropertiesFromService>
     <!-- day month year hours:minutes:seconds timezone -->
-    <DataCacheName>Earth/Landsat256</DataCacheName>
-    <ImageFormat>image/jpeg</ImageFormat>
+    <DataCacheName>Earth/FAASectionals-png</DataCacheName>
+    <ImageFormat>image/png</ImageFormat>
     <AvailableImageFormats>
         <ImageFormat>image/png</ImageFormat>
         <ImageFormat>image/jpeg</ImageFormat>
     </AvailableImageFormats>
-    <FormatSuffix>.jpg</FormatSuffix>
-    <NumLevels count="10" numEmpty="0"/>
+    <FormatSuffix>.png</FormatSuffix>
+    <NumLevels count="9" numEmpty="0"/>
     <TileOrigin>
         <LatLon units="degrees" latitude="-90" longitude="-180"/>
     </TileOrigin>
@@ -34,10 +34,10 @@
     </TileSize>
     <Sector>
         <SouthWest>
-            <LatLon units="degrees" latitude="-90" longitude="-180"/>
+            <LatLon units="degrees" latitude="0" longitude="-180"/>
         </SouthWest>
         <NorthEast>
-            <LatLon units="degrees" latitude="90" longitude="180"/>
+            <LatLon units="degrees" latitude="72" longitude="180"/>
         </NorthEast>
     </Sector>
     <UseTransparentTextures>true</UseTransparentTextures>
