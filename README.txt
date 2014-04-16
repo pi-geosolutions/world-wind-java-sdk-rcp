@@ -61,7 +61,7 @@ New features and improvements in World Wind Java SDK 2.0.0
 ------------------------------------------------------------
 - See http://goworldwind.org/releases/ for a description of this release's major features.
 
-- Migrated World Wind's usage of the JOGL library to JOGL version 2.1.4.
+- Migrated World Wind's usage of the JOGL library to JOGL version 2.1.5.
 - Redesigned the World Wind Java Web Start site to work with JOGL 2 and Java 7 on all platforms..
 - Redesigned the World Wind Java applet examples to work with JOGL 2 and Java 7 on all platforms.
   New applets leverage the same Java Web Start resources used by applications.
@@ -77,6 +77,8 @@ New features and improvements in World Wind Java SDK 2.0.0
   altitudes to relative-to-ground, which is what the intersection methods expect.
 - Updated TiledImageLayer, RectangularTessellator and SurfaceObjectTileBuilder to adjust their level of detail when the
   application uses a narrow field of view. See WWJ-445.
+- Updated View to use the smallest possible near clip distance for the currently available depth buffer resolution.
+  See WWJ-460.
 - Updated the FlatWorldEarthquakes example to use the USGS GeoJSON earthquake feed.
 - Fixed WWJ-302, that caused flashing of continuously updating KML ground overlays.
 - Fixed WWJ-371, where some portions of Collada shapes were not pickable.
@@ -95,6 +97,10 @@ New features and improvements in World Wind Java SDK 2.0.0
 - Added option to eliminate library loader replacement when initializing GDAL.
 - Added a base depth to ExtrudedPolygon to enable positioning of base vertices below the terrain.
 - Consume left-click, left double-click and drag end events in ViewControlsSelectListener.
+- Fixed WWJ-353, clamp bounding box angles returned from WMS capabilities documents.
+- Fixed WWJ-454, WMS requests use incorrect version string.
+- Fixed WWJ-441, Duplicate picked objects from IconLayer. Modified IconLayer to prevent duplicates in quadtree.
+- Added IconPicking example.
 
   Note on using the JOGL libraries without the default runtime extraction of native binaries.
     This is accomplished by modifying World Wind's JOGL distribution to load native binaries directly from the library
