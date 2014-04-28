@@ -57,6 +57,13 @@ This will most likely be either NVIDIA, ATI or Intel. The drivers are typically 
 than the graphics card manufacturer's.
 
 
+Known issues in World Wind Java SDK 2.0.0
+------------------------------------------------------------
+
+- Videos in browser balloons do not play on Mac OS X. See http://issues.worldwind.arc.nasa.gov/jira/browse/WWJ-215
+- World Wind Java Applets display an empty frame on Mac OS X. See http://issues.worldwind.arc.nasa.gov/jira/browse/WWJ-464
+
+
 New features and improvements in World Wind Java SDK 2.0.0
 ------------------------------------------------------------
 - See http://goworldwind.org/releases/ for a description of this release's major features.
@@ -88,6 +95,7 @@ New features and improvements in World Wind Java SDK 2.0.0
 - Fixed WWJ-443, where enabling stereo rendering on an unsupported GPU caused surface shape picking to fail without warning.
 - Fixed WWJ-449, which corrects the KML parser's interpretation of an unspecified altitudeMode.
 - Fixed WWJ-451, where LevelSet.getTileNumber overflows when the number of tiles is large.
+- Fixed WWJ-432, BrowserBalloon content does not display on Mac with Java Web Start.
 - Repaired non-scoped abstract method declaration in RigidShape class.
 - Added Angle formatting for degrees and decimal minutes. Added degrees and decimal minutes option to LatLonGraticule.
 - Modified shapefile loading to recognize the HGT attribute field as a height and create extruded polygons as a result.
@@ -101,6 +109,12 @@ New features and improvements in World Wind Java SDK 2.0.0
 - Fixed WWJ-454, WMS requests use incorrect version string.
 - Fixed WWJ-441, Duplicate picked objects from IconLayer. Modified IconLayer to prevent duplicates in quadtree.
 - Added IconPicking example.
+- Fixed WWJ-434, KML rendering will freeze while having bad internet connection.
+- Fixed WWJ-466, KML balloon text showing entity reference instead of blank field.
+- Fixed WWJ-467, StatusBar altitude display below 1 km gives 0 km.
+- Fixed WWJ-469, Warning from KMLRoot evictIfExpired.
+- Fixed WWJ-481, CompoundElevationModel.getElevations methods returning incorrect resolution.
+- Added a batch intersection method to HighResolutionTerrain. See intersect(List<Position> positions ...
 
   Note on using the JOGL libraries without the default runtime extraction of native binaries.
     This is accomplished by modifying World Wind's JOGL distribution to load native binaries directly from the library
@@ -157,6 +171,7 @@ New features and improvements in World Wind Java SDK 1.5.0 - January 21, 2013
 - Fixed a regression bug where Box ignores the R axis while computing its effective radius.
 - Fixed a bug where enabling Path lighting caused the JVM to crash.
 - Fixed a bug where enabling ExtrudedPolygon side lighting with cap lighting disabled caused a NullPointerException.
+- Fixed a bug where MIL-STD-2525 tactical symbols throw an exception when the OpenGL Context changes.
 - Fixed a bug where the MIL-STD-2525 Fire Support Line graphic appears in the wrong place.
 - Fixed a bug preventing COLLADA models from updating after a position change.
 - Fixed a bug in Triangle.intersectTriangleTypes preventing triangle strip intersection from operating correctly.

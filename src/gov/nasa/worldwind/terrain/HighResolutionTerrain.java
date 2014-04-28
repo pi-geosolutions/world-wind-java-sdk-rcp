@@ -17,6 +17,7 @@ import gov.nasa.worldwind.util.*;
 import java.awt.*;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.*;
 
 /**
  * Provides operations on the best available terrain. Operations such as line/terrain intersection and surface point
@@ -78,7 +79,7 @@ public class HighResolutionTerrain extends WWObjectImpl implements Terrain
     }
 
     protected static final int DEFAULT_DENSITY = 3;
-    protected static final long DEFAULT_CACHE_CAPACITY = (long) 20e6; // about 34,000 RenderInfos at a density of 20
+    protected static final long DEFAULT_CACHE_CAPACITY = (long) 50e6;
 
     // User-specified fields.
     protected Globe globe;
@@ -419,6 +420,63 @@ public class HighResolutionTerrain extends WWObjectImpl implements Terrain
         return this.intersect(new Position(pA, altitudeA), new Position(pB, altitudeB));
     }
 
+    /** Defines an interface for returning computed intersections. */
+    public interface IntersectionCallback
+    {
+        /**
+         * Called with the computed intersections for a line. This method is called only for lines along which
+         * intersections occur.
+         *
+         * @param pA            The line's start point.
+         * @param pB            The line's end point.
+         * @param intersections An array of intersections.
+         */
+        void intersection(Position pA, Position pB, Intersection[] intersections);
+    }
+
+    /**
+     * Intersects a specified list of geographic two-position lines with the terrain.
+     *
+     * @param positions The positions to intersect, with the line segments formed by each pair of positions, e.g. the
+     *                  first line in formed by positions[0] and positions[1], the second by positions[2] and
+     *                  positions[3], etc.
+     * @param callback  An object to call in order to return the computed intersections.
+     *
+     * @throws InterruptedException
+     */
+    public void intersect(List<Position> positions, final IntersectionCallback callback) throws InterruptedException
+    {
+        for (int i = 0; i < positions.size(); i += 2)
+        {
+            this.cacheIntersectingTiles(positions.get(i), positions.get(i + 1));
+        }
+
+        // TODO: Determine whether multi-threading these calculations improves performance.
+        ExecutorService service = Executors.newFixedThreadPool(1);
+
+        for (int i = 0; i < positions.size(); i += 2)
+        {
+            final Position pA = positions.get(i);
+            final Position pB = positions.get(i + 1);
+
+            service.submit(new Runnable()
+            {
+                @Override
+                public void run()
+                {
+                    Intersection[] intersections = intersect(pA, pB);
+                    if (intersections != null)
+                    {
+                        callback.intersection(pA, pB, intersections);
+                    }
+                }
+            });
+        }
+
+        service.shutdown();
+        service.awaitTermination(120, TimeUnit.SECONDS);
+    }
+
     /**
      * Cause the tiles used by subsequent intersection calculations to be cached so that they are available immediately
      * to those subsequent calculations.
@@ -452,7 +510,10 @@ public class HighResolutionTerrain extends WWObjectImpl implements Terrain
 
             for (RectTile tile : tiles)
             {
-                this.makeVerts(tile);
+                if (tile.ri == null)
+                {
+                    this.makeVerts(tile);
+                }
             }
         }
         finally
@@ -612,6 +673,7 @@ public class HighResolutionTerrain extends WWObjectImpl implements Terrain
         if (tile != null)
             return tile;
 
+        // TODO: BBOX computed is reported to be too small. Occurs when two elevation models are active.
         Extent extent = Sector.computeBoundingBox(this.globe, this.verticalExaggeration, tileSector);
 
         tile = new RectTile(extent, this.density, tileSector);
