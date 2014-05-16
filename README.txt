@@ -57,13 +57,6 @@ This will most likely be either NVIDIA, ATI or Intel. The drivers are typically 
 than the graphics card manufacturer's.
 
 
-Known issues in World Wind Java SDK 2.0.0
-------------------------------------------------------------
-
-- Videos in browser balloons do not play on Mac OS X. See http://issues.worldwind.arc.nasa.gov/jira/browse/WWJ-215
-- World Wind Java Applets display an empty frame on Mac OS X. See http://issues.worldwind.arc.nasa.gov/jira/browse/WWJ-464
-
-
 New features and improvements in World Wind Java SDK 2.0.0
 ------------------------------------------------------------
 - See http://goworldwind.org/releases/ for a description of this release's major features.
@@ -113,8 +106,12 @@ New features and improvements in World Wind Java SDK 2.0.0
 - Fixed WWJ-466, KML balloon text showing entity reference instead of blank field.
 - Fixed WWJ-467, StatusBar altitude display below 1 km gives 0 km.
 - Fixed WWJ-469, Warning from KMLRoot evictIfExpired.
-- Fixed WWJ-481, CompoundElevationModel.getElevations methods returning incorrect resolution.
 - Added a batch intersection method to HighResolutionTerrain. See intersect(List<Position> positions ...
+- Fixed WWJ-482, RigidShapes not regenerating geometry when detail hint changes.
+- Fixed WWJ-483, GeoTIFF elevations created by ExportImageOrElevations example are incorrect.
+
+The outstanding bugs and improvement requests can be viewed with the following URL:
+http://issues.worldwind.arc.nasa.gov/jira/issues/?jql=project%20%3D%20WWJ%20AND%20status%20in%20(Open%2C%20%22In%20Progress%22%2C%20Reopened)
 
   Note on using the JOGL libraries without the default runtime extraction of native binaries.
     This is accomplished by modifying World Wind's JOGL distribution to load native binaries directly from the library
