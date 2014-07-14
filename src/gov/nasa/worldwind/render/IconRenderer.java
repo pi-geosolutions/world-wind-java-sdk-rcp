@@ -105,7 +105,7 @@ public class IconRenderer
     /**
      * Indicates whether to render icons outside the view volume. This is primarily to control icon visibility beyond
      * the far view clipping plane. Some important use cases demand that clipping not be performed. If horizon clipping
-     * is enabled, the icon is also tested for horizon clipping. The default is <code>false</code>, view volume clipping
+     * is enabled, the icon is also tested for horizon clipping. The default is <code>true</code>, view volume clipping
      * is not performed.
      *
      * @param viewClippingEnabled <code>true</code> if view clipping should be performed, otherwise <code>false</code>.
@@ -288,7 +288,7 @@ public class IconRenderer
 
             double eyeDistance = icon.isAlwaysOnTop() ? 0 : dc.getView().getEyePoint().distanceTo3(iconPoint);
 
-            if (this.isHorizonClippingEnabled() && eyeDistance > horizon)
+            if (this.isHorizonClippingEnabled() && !dc.is2DGlobe() && eyeDistance > horizon)
             {
                 // Record feedback data for this WWIcon if feedback is enabled.
                 this.recordFeedback(dc, icon, iconPoint, null);

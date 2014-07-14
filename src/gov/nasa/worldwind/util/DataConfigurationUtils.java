@@ -953,7 +953,12 @@ public class DataConfigurationUtils
 
         for (String format : offering.getSupportedFormats().getStrings())
         {
-            if (format.toLowerCase().contains("tiff")) // lots of variants in use, so find one
+            if (format.toLowerCase().contains("image/tiff"))
+            {
+                params.setValue(AVKey.IMAGE_FORMAT, format);
+                break;
+            }
+            else if (format.toLowerCase().contains("tiff")) // lots of variants in use, so find one
             {
                 params.setValue(AVKey.IMAGE_FORMAT, format);
                 break;
@@ -1043,11 +1048,6 @@ public class DataConfigurationUtils
                 service = "WMS";
                 CapabilitiesRequest request = new CapabilitiesRequest(new URI(uri), service);
                 return request.getUri().toURL();
-            }
-            else if (service.equals(OGCConstants.WCS_SERVICE_NAME))
-            {
-                service = "WCS";
-                // TODO: make and issue the request
             }
         }
         catch (URISyntaxException e)

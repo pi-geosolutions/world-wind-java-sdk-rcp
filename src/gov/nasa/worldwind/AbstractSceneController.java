@@ -8,7 +8,7 @@ package gov.nasa.worldwind;
 
 import gov.nasa.worldwind.avlist.AVKey;
 import gov.nasa.worldwind.cache.GpuResourceCache;
-import gov.nasa.worldwind.geom.Position;
+import gov.nasa.worldwind.geom.*;
 import gov.nasa.worldwind.layers.Layer;
 import gov.nasa.worldwind.pick.*;
 import gov.nasa.worldwind.render.*;
@@ -74,11 +74,12 @@ public abstract class AbstractSceneController extends WWObjectImpl implements Sc
     /** Support class used to build the composite representation of surface objects as a list of SurfaceTiles. */
     protected SurfaceObjectTileBuilder surfaceObjectTileBuilder;
     /** The composite surface object representation. Populated each frame by the {@link #surfaceObjectTileBuilder}. */
-    protected Collection<SurfaceTile> surfaceObjectTiles = new ArrayList<SurfaceTile>();
+    protected HashSet<SurfaceTile> surfaceObjectTiles = new HashSet<SurfaceTile>();
     /** The display name for the surface object tile count performance statistic. */
     protected static final String SURFACE_OBJECT_TILE_COUNT_NAME = "Surface Object Tiles";
     protected ClutterFilter clutterFilter = new BasicClutterFilter();
 //    protected Map<String, GroupingFilter> groupingFilters = new HashMap<String, GroupingFilter>();
+    protected boolean deferOrderedRendering;
 
     public AbstractSceneController()
     {
@@ -375,6 +376,16 @@ public abstract class AbstractSceneController extends WWObjectImpl implements Sc
 //        }
 //    }
 
+    public boolean isDeferOrderedRendering()
+    {
+        return deferOrderedRendering;
+    }
+
+    public void setDeferOrderedRendering(boolean deferOrderedRendering)
+    {
+        this.deferOrderedRendering = deferOrderedRendering;
+    }
+
     public int repaint()
     {
         this.frameTime = System.currentTimeMillis();
@@ -444,6 +455,7 @@ public abstract class AbstractSceneController extends WWObjectImpl implements Sc
         dc.setPickPoint(this.pickPoint);
         dc.setPickRectangle(this.pickRect);
         dc.setViewportCenterScreenPoint(this.getViewportCenter(dc));
+        dc.setViewportCenterPosition(null);
         dc.setClutterFilter(this.getClutterFilter());
 //        dc.setGroupingFilters(this.groupingFilters);
 
@@ -600,10 +612,8 @@ public abstract class AbstractSceneController extends WWObjectImpl implements Sc
             if (dc.getPickPoint() != null)
                 this.pickPoints.add(dc.getPickPoint());
 
-            // Clear viewportCenterPosition.
-            dc.setViewportCenterPosition(null);
             Point vpc = dc.getViewportCenterScreenPoint();
-            if (vpc != null)
+            if (vpc != null && dc.getViewportCenterPosition() == null)
                 this.pickPoints.add(vpc);
 
             if (this.pickPoints.size() == 0)
@@ -761,6 +771,10 @@ public abstract class AbstractSceneController extends WWObjectImpl implements Sc
             dc.enablePickingMode();
             this.pickTerrain(dc);
             this.doNonTerrainPick(dc);
+
+            if (this.isDeferOrderedRendering())
+                return;
+
             this.resolveTopPick(dc);
             this.lastPickedObjects = new PickedObjectList(dc.getPickedObjects());
             this.lastObjectsInPickRect = new PickedObjectList(dc.getObjectsInPickRectangle());
@@ -793,6 +807,9 @@ public abstract class AbstractSceneController extends WWObjectImpl implements Sc
 
         // Pick against the deferred/ordered surface renderables.
         this.pickOrderedSurfaceRenderables(dc);
+
+        if (this.isDeferOrderedRendering())
+            return;
 
         // Pick against the screen credits.
         if (this.screenCreditController != null)
@@ -884,6 +901,9 @@ public abstract class AbstractSceneController extends WWObjectImpl implements Sc
 
             // Draw the deferred/ordered surface renderables.
             this.drawOrderedSurfaceRenderables(dc);
+
+            if (this.isDeferOrderedRendering())
+                return;
 
             if (this.screenCreditController != null)
                 this.screenCreditController.render(dc);

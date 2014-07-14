@@ -39,6 +39,7 @@
       <w>enzmann</w>
       <w>eogsh</w>
       <w>epsg</w>
+      <w>equirectangular</w>
       <w>filestore</w>
       <w>framebuffer</w>
       <w>func</w>
@@ -133,6 +134,7 @@
       <w>tuple</w>
       <w>tuples</w>
       <w>unmark</w>
+      <w>usgs</w>
       <w>vbase</w>
       <w>vbos</w>
       <w>vcap</w>

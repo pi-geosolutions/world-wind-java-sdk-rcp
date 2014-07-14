@@ -10,7 +10,7 @@ import com.jogamp.opengl.util.texture.TextureCoords;
 import gov.nasa.worldwind.*;
 import gov.nasa.worldwind.cache.GpuResourceCache;
 import gov.nasa.worldwind.geom.*;
-import gov.nasa.worldwind.globes.Globe;
+import gov.nasa.worldwind.globes.*;
 import gov.nasa.worldwind.layers.*;
 import gov.nasa.worldwind.pick.*;
 import gov.nasa.worldwind.terrain.*;
@@ -100,19 +100,32 @@ public class DrawContextImpl extends WWObjectImpl implements DrawContext
         protected OrderedRenderable or;
         protected double distanceFromEye;
         protected long time;
+        protected int globeOffset;
+        protected SectorGeometryList surfaceGeometry;
 
-        public OrderedRenderableEntry(OrderedRenderable orderedRenderable, long insertionTime)
+        public OrderedRenderableEntry(OrderedRenderable orderedRenderable, long insertionTime, DrawContext dc)
         {
             this.or = orderedRenderable;
             this.distanceFromEye = orderedRenderable.getDistanceFromEye();
             this.time = insertionTime;
+            if (dc.isContinuous2DGlobe())
+            {
+                this.globeOffset = ((Globe2D) dc.getGlobe()).getOffset();
+                this.surfaceGeometry = dc.getSurfaceGeometry();
+            }
         }
 
-        public OrderedRenderableEntry(OrderedRenderable orderedRenderable, double distanceFromEye, long insertionTime)
+        public OrderedRenderableEntry(OrderedRenderable orderedRenderable, double distanceFromEye, long insertionTime,
+            DrawContext dc)
         {
             this.or = orderedRenderable;
             this.distanceFromEye = distanceFromEye;
             this.time = insertionTime;
+            if (dc.isContinuous2DGlobe())
+            {
+                this.globeOffset = ((Globe2D) dc.getGlobe()).getOffset();
+                this.surfaceGeometry = dc.getSurfaceGeometry();
+            }
         }
     }
 
@@ -636,6 +649,18 @@ public class DrawContextImpl extends WWObjectImpl implements DrawContext
         return declutteringTextRenderer;
     }
 
+    @Override
+    public boolean is2DGlobe()
+    {
+        return this.globe instanceof Globe2D;
+    }
+
+    @Override
+    public boolean isContinuous2DGlobe()
+    {
+        return this.globe instanceof Globe2D && ((Globe2D) this.getGlobe()).isContinuous();
+    }
+
     public void addOrderedRenderable(OrderedRenderable orderedRenderable)
     {
         if (null == orderedRenderable)
@@ -645,7 +670,7 @@ public class DrawContextImpl extends WWObjectImpl implements DrawContext
             return; // benign event
         }
 
-        this.orderedRenderables.add(new OrderedRenderableEntry(orderedRenderable, System.nanoTime()));
+        this.orderedRenderables.add(new OrderedRenderableEntry(orderedRenderable, System.nanoTime(), this));
     }
 
     /** {@inheritDoc} */
@@ -663,7 +688,8 @@ public class DrawContextImpl extends WWObjectImpl implements DrawContext
         // If multiple ordered renderables are added in this way, they are drawn according to the order in which they
         // are added.
         double eyeDistance = isBehind ? Double.MAX_VALUE : orderedRenderable.getDistanceFromEye();
-        this.orderedRenderables.add(new OrderedRenderableEntry(orderedRenderable, eyeDistance, System.nanoTime()));
+        this.orderedRenderables.add(
+            new OrderedRenderableEntry(orderedRenderable, eyeDistance, System.nanoTime(), this));
     }
 
     public OrderedRenderable peekOrderedRenderables()
@@ -676,6 +702,12 @@ public class DrawContextImpl extends WWObjectImpl implements DrawContext
     public OrderedRenderable pollOrderedRenderables()
     {
         OrderedRenderableEntry ore = this.orderedRenderables.poll();
+
+        if (ore != null && this.isContinuous2DGlobe())
+        {
+            ((Globe2D) this.getGlobe()).setOffset(ore.globeOffset);
+            this.setSurfaceGeometry(ore.surfaceGeometry);
+        }
 
         return ore != null ? ore.or : null;
     }

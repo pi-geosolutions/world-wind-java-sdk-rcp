@@ -20,6 +20,8 @@
               value="gov.nasa.worldwind.globes.Earth"/>
     <Property name="gov.nasa.worldwind.avkey.EarthElevationModelConfigFile"
               value="config/Earth/EarthElevations2.xml"/>
+    <Property name="gov.nasa.worldwind.globes.GeographicProjectionClassName"
+              value="gov.nasa.worldwind.globes.projections.ProjectionEquirectangular"/>
     <Property name="gov.nasa.worldwind.avkey.InitialLatitude" value="38"/>
     <Property name="gov.nasa.worldwind.avkey.InitialAltitude" value="19.07e6"/>
     <Property name="gov.nasa.worldwind.avkey.ViewClassName" value="gov.nasa.worldwind.view.orbit.BasicOrbitView"/>

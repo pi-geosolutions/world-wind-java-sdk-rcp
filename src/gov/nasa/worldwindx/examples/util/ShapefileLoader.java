@@ -121,6 +121,11 @@ public class ShapefileLoader
             Logging.logger().warning(Logging.getMessage("generic.UnrecognizedShapeType", shp.getShapeType()));
         }
 
+        if (layer != null && shp.getBoundingRectangle() != null)
+        {
+            layer.setValue(AVKey.SECTOR, Sector.fromDegrees(shp.getBoundingRectangle()));
+        }
+
         return layer;
     }
 
@@ -369,16 +374,25 @@ public class ShapefileLoader
 
     protected PointPlacemarkAttributes nextPointAttributes()
     {
-        return randomAttrs.nextPointAttributes();
+        synchronized (randomAttrs)
+        {
+            return randomAttrs.nextPointAttributes();
+        }
     }
 
     protected ShapeAttributes nextPolylineAttributes()
     {
-        return randomAttrs.nextPolylineAttributes();
+        synchronized (randomAttrs)
+        {
+            return randomAttrs.nextPolylineAttributes();
+        }
     }
 
     protected ShapeAttributes nextPolygonAttributes()
     {
-        return randomAttrs.nextPolygonAttributes();
+        synchronized (randomAttrs)
+        {
+            return randomAttrs.nextPolygonAttributes();
+        }
     }
 }

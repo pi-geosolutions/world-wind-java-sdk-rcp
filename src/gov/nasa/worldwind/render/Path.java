@@ -73,6 +73,10 @@ import static gov.nasa.worldwind.ogc.kml.impl.KMLExportUtil.kmlBoolean;
  * dot under the cursor is returned as an Integer object in the PickedObject's AVList under they key AVKey.ORDINAL.
  * Position dots intersecting the pick rectangle are returned as a List of Integer objects in the PickedObject's AVList
  * under the key AVKey.ORDINAL_LIST.
+ * <p/>
+ * When drawn on a 2D globe, this shape uses a {@link SurfacePolyline} to represent itself. The following features are
+ * not provided in this case: display of path positions, extrusion, outline pick width, and identification of
+ * path position picked.
  *
  * @author tag
  * @version $Id$
@@ -752,6 +756,10 @@ public class Path extends AbstractShape
 
         this.positions = positions;
         this.computePositionCount();
+
+        if (this.surfaceShape != null)
+            ((SurfacePolyline) this.surfaceShape).setLocations(positions);
+
         this.reset();
     }
 
@@ -930,6 +938,8 @@ public class Path extends AbstractShape
     public void setPathType(String pathType)
     {
         this.pathType = pathType;
+        if (this.surfaceShape != null)
+            this.surfaceShape.setPathType(this.pathType);
         this.reset();
     }
 
@@ -1084,6 +1094,15 @@ public class Path extends AbstractShape
     protected boolean isSurfacePath()
     {
         return this.getAltitudeMode() == WorldWind.CLAMP_TO_GROUND && this.isFollowTerrain();
+    }
+
+    @Override
+    protected SurfaceShape createSurfaceShape()
+    {
+        SurfacePolyline pl = new SurfacePolyline(this.getPositions());
+        pl.setPathType(this.getPathType());
+
+        return pl;
     }
 
     @Override
