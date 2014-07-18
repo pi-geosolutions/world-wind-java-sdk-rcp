@@ -1162,6 +1162,8 @@ public abstract class AbstractShape extends WWObjectImpl
      */
     protected void doDrawOrderedRenderable(DrawContext dc, PickSupport pickCandidates)
     {
+        this.currentData = (AbstractShapeData) this.shapeDataCache.getEntry(dc.getGlobe());
+
         GL2 gl = dc.getGL().getGL2(); // GL initialization checks for GL2 compatibility.
 
         dc.getView().setReferenceCenter(dc, this.getCurrentData().getReferencePoint());
