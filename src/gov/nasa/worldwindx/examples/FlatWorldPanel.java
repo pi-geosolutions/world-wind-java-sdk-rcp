@@ -7,6 +7,7 @@ package gov.nasa.worldwindx.examples;
 
 import gov.nasa.worldwind.WorldWindow;
 import gov.nasa.worldwind.avlist.AVKey;
+import gov.nasa.worldwind.geom.Angle;
 import gov.nasa.worldwind.globes.*;
 import gov.nasa.worldwind.globes.projections.*;
 import gov.nasa.worldwind.view.orbit.*;
@@ -40,11 +41,11 @@ public class FlatWorldPanel extends JPanel
         {
             this.flatGlobe = (FlatGlobe) wwd.getModel().getGlobe();
             this.roundGlobe = new Earth();
+            this.apply2DViewLimits();
         }
         else
         {
             this.flatGlobe = new EarthFlat();
-            this.flatGlobe.setContinuous(true);
             this.roundGlobe = wwd.getModel().getGlobe();
         }
         this.makePanel();
@@ -99,6 +100,7 @@ public class FlatWorldPanel extends JPanel
             public void actionPerformed(ActionEvent actionEvent)
             {
                 updateProjection();
+                apply2DViewLimits();
             }
         });
         comboPanel.add(this.projectionCombo);
@@ -152,30 +154,33 @@ public class FlatWorldPanel extends JPanel
         {
             // Switch to round globe
             wwd.getModel().setGlobe(roundGlobe);
-            // Switch to orbit view
-            FlatOrbitView flatOrbitView = (FlatOrbitView) wwd.getView();
-            BasicOrbitView orbitView = new BasicOrbitView();
-            orbitView.setCenterPosition(flatOrbitView.getCenterPosition());
-            orbitView.setZoom(flatOrbitView.getZoom());
-            orbitView.setHeading(flatOrbitView.getHeading());
-            orbitView.setPitch(flatOrbitView.getPitch());
-            wwd.setView(orbitView);
+            // Stop any view movement and reset the view property limits.
+            wwd.getView().stopMovement();
+            wwd.getView().getViewPropertyLimits().reset();
         }
         else
         {
             // Switch to flat globe
             wwd.getModel().setGlobe(flatGlobe);
             this.updateProjection();
-            // Switch to flat view
-            BasicOrbitView orbitView = (BasicOrbitView) wwd.getView();
-            FlatOrbitView flatOrbitView = new FlatOrbitView();
-            flatOrbitView.setCenterPosition(orbitView.getCenterPosition());
-            flatOrbitView.setZoom(orbitView.getZoom());
-            flatOrbitView.setHeading(orbitView.getHeading());
-            flatOrbitView.setPitch(orbitView.getPitch());
-            wwd.setView(flatOrbitView);
+            // Stop any view movement and limit the view's tilt and zoom properites.
+            wwd.getView().stopMovement();
+            this.apply2DViewLimits();
         }
 
         wwd.redraw();
+    }
+
+    protected void apply2DViewLimits()
+    {
+        OrbitView view = (OrbitView) wwd.getView();
+        double maxZoom = Math.PI * wwd.getModel().getGlobe().getEquatorialRadius()
+            / view.getFieldOfView().tanHalfAngle();
+        view.getOrbitViewLimits().setPitchLimits(Angle.ZERO, Angle.ZERO);
+        view.getOrbitViewLimits().setRollLimits(Angle.ZERO, Angle.ZERO);
+        view.getOrbitViewLimits().setZoomLimits(0, maxZoom);
+        view.setDetectCollisions(false);
+        BasicOrbitViewLimits.applyLimits(view, view.getOrbitViewLimits());
+        view.setDetectCollisions(true);
     }
 }

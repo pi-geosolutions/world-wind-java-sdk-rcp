@@ -11,6 +11,7 @@ import gov.nasa.worldwind.globes.*;
 
 /**
  * Implements an Equirectangular projection, also known as Equidistant Cylindrical, Plate Carree and Rectangular.
+ * The projected globe is spherical, not ellipsoidal.
  *
  * @author tag
  * @version $Id$
@@ -41,5 +42,11 @@ public class ProjectionEquirectangular implements GeographicProjection
     {
         return Position.fromRadians(cart.y / globe.getEquatorialRadius(),
             (cart.x - offset.x) / globe.getEquatorialRadius(), cart.z);
+    }
+
+    @Override
+    public Vec4 northPointingTangent(Globe globe, Angle latitude, Angle longitude)
+    {
+        return Vec4.UNIT_Y;
     }
 }
