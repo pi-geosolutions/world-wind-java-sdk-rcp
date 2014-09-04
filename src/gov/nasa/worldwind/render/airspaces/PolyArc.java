@@ -8,7 +8,7 @@ package gov.nasa.worldwind.render.airspaces;
 
 import gov.nasa.worldwind.geom.*;
 import gov.nasa.worldwind.globes.Globe;
-import gov.nasa.worldwind.render.DrawContext;
+import gov.nasa.worldwind.render.*;
 import gov.nasa.worldwind.util.*;
 
 import java.util.*;
@@ -130,6 +130,7 @@ public class PolyArc extends Polygon
         }
 
         this.radius = radius;
+        this.invalidateAirspaceData();
     }
 
     public Angle[] getAzimuths()
@@ -157,6 +158,7 @@ public class PolyArc extends Polygon
 
         this.leftAzimuth = leftAzimuth;
         this.rightAzimuth = rightAzimuth;
+        this.invalidateAirspaceData();
     }
 
     protected int getSlices()
@@ -193,6 +195,16 @@ public class PolyArc extends Polygon
         this.makeExtremePoints(globe, verticalExaggeration, tessellatedLocations, points);
 
         return points;
+    }
+
+    @Override
+    protected void regenerateSurfaceShape(DrawContext dc, SurfaceShape shape)
+    {
+        ArrayList<LatLon> arcLocations = new ArrayList<LatLon>();
+        ArrayList<Boolean> arcFlags = new ArrayList<Boolean>();
+        this.makePolyArcLocations(dc.getGlobe(), this.getLocationList(), this.slices, arcLocations, arcFlags);
+
+        ((SurfacePolygon) shape).setOuterBoundary(arcLocations);
     }
 
     //**************************************************************//
@@ -270,7 +282,7 @@ public class PolyArc extends Polygon
                 GeometryBuilder gb = this.getGeometryBuilder();
                 Vec4[] polyPoints = new Vec4[locationCount + 1];
                 Matrix[] polyTransform = new Matrix[1];
-                int polyCount = this.computeCartesianPolygon(globe, locations, null, polyPoints, null, polyTransform);
+                int polyCount = this.computeEllipsoidalPolygon(globe, locations, null, polyPoints, null, polyTransform);
                 int polyWinding = gb.computePolygonWindingOrder2(0, polyCount, polyPoints);
 
                 if (polyWinding == GeometryBuilder.COUNTER_CLOCKWISE)
@@ -302,14 +314,14 @@ public class PolyArc extends Polygon
         LatLon[] locations)
     {
         int count = this.getArcVertexCount(slices);
-        Matrix transform = globe.computeSurfaceOrientationAtPosition(center.getLatitude(), center.getLongitude(), 0.0);
+        Matrix transform = globe.computeEllipsoidalOrientationAtPosition(center.latitude, center.longitude, 0);
         Vec4[] points = new Vec4[count];
         this.makeArc(radius, slices, start, sweep, transform, points);
 
         for (int i = 0; i < count; i++)
         {
-            Position pos = globe.computePositionFromPoint(points[i]);
-            locations[i] = new LatLon(pos.getLatitude(), pos.getLongitude());
+            Position pos = globe.computePositionFromEllipsoidalPoint(points[i]);
+            locations[i] = new LatLon(pos.latitude, pos.longitude);
         }
     }
 

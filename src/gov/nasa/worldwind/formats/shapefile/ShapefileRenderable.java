@@ -20,17 +20,44 @@ import java.util.*;
 public abstract class ShapefileRenderable extends WWObjectImpl
     implements Renderable, Iterable<ShapefileRenderable.Record>
 {
+    /**
+     * AttributeDelegate provides an entry point for configuring a ShapefileRenderable.Record's shape attributes and
+     * key-value attributes during ShapefileRenderable construction. In particular, the dBASE attributes associated with
+     * a ShapefileRecord are available only during these entry points.
+     * <p/>
+     * AttributeDelegate entry points may be called on a non-EDT thread. Implementations of AttributeDelegate may modify
+     * the ShapefileRenderable.Record passed to these methods, but should not modify the ShapefileRenderable without
+     * synchronizing access with the thread used to create the ShapefileRenderable.
+     */
+    public interface AttributeDelegate
+    {
+        /**
+         * Entry point for configuring a ShapefileRenderable.Record's shape attributes and key-value attributes during
+         * ShapefileRenderable construction. The ShapefileRecord's dBASE attributes are available only during the
+         * execution of this method.
+         * <p/>
+         * This method may be called on a non-EDT thread. Implementations may modify the renderableRecord, but should
+         * not modify the ShapefileRenderable without synchronizing access with the thread used to create the
+         * ShapefileRenderable.
+         *
+         * @param shapefileRecord  The shapefile record used to create the ShapefileRenderable.Record.
+         * @param renderableRecord The ShapefileRenderable.Record to assign attributes for.
+         */
+        void assignAttributes(ShapefileRecord shapefileRecord, ShapefileRenderable.Record renderableRecord);
+    }
+
     public static class Record extends AVListImpl implements Highlightable
     {
         // Record properties.
         protected ShapefileRenderable shapefileRenderable;
         protected Sector sector; // null by default, must be initialized by subclass
-        protected int recordNumber;
+        protected int ordinal;
         protected boolean visible = true;
         protected boolean highlighted;
         protected ShapeAttributes normalAttrs;
         protected ShapeAttributes highlightAttrs;
         // Data structures supporting record tessellation and display.
+        protected CompoundVecBuffer pointBuffer;
         protected int firstPartNumber;
         protected int lastPartNumber;
         protected int numberOfPoints;
@@ -52,7 +79,7 @@ public abstract class ShapefileRenderable extends WWObjectImpl
             }
 
             this.shapefileRenderable = shapefileRenderable;
-            this.recordNumber = shapefileRecord.getRecordNumber();
+            this.pointBuffer = shapefileRecord.getShapeFile().getPointBuffer();
             this.firstPartNumber = shapefileRecord.getFirstPartNumber();
             this.lastPartNumber = shapefileRecord.getLastPartNumber();
             this.numberOfPoints = shapefileRecord.getNumberOfPoints();
@@ -68,9 +95,9 @@ public abstract class ShapefileRenderable extends WWObjectImpl
             return this.sector;
         }
 
-        public int getRecordNumber()
+        public int getOrdinal()
         {
-            return this.recordNumber;
+            return this.ordinal;
         }
 
         public boolean isVisible()
@@ -135,6 +162,10 @@ public abstract class ShapefileRenderable extends WWObjectImpl
     protected Sector sector;
     protected ArrayList<ShapefileRenderable.Record> records;
     protected boolean visible = true;
+    // Properties used during initialization.
+    protected ShapeAttributes initNormalAttrs;
+    protected ShapeAttributes initHighlightAttrs;
+    protected ShapefileRenderable.AttributeDelegate initAttributeDelegate;
 
     protected static ShapeAttributes defaultAttributes;
     protected static ShapeAttributes defaultHighlightAttributes;
@@ -149,45 +180,77 @@ public abstract class ShapefileRenderable extends WWObjectImpl
         defaultHighlightAttributes.setOutlineMaterial(Material.DARK_GRAY);
     }
 
-    public ShapefileRenderable(Shapefile shapefile)
+    /**
+     * Initializes this ShapefileRenderable with the specified shapefile. The normal attributes, the highlight
+     * attributes and the attribute delegate are optional. Specifying a non-null value for normalAttrs or highlightAttrs
+     * causes each ShapefileRenderable.Record to adopt those attributes. Specifying a non-null value for the attribute
+     * delegate enables callbacks during creation of each ShapefileRenderable.Record. See {@link AttributeDelegate} for
+     * more information.
+     *
+     * @param shapefile         The shapefile to display.
+     * @param normalAttrs       The normal attributes for each ShapefileRenderable.Record. May be null to use the
+     *                          default attributes.
+     * @param highlightAttrs    The highlight attributes for each ShapefileRenderable.Record. May be null to use the
+     *                          default highlight attributes.
+     * @param attributeDelegate Optional callback for configuring each ShapefileRenderable.Record's shape attributes and
+     *                          key-value attributes. May be null.
+     */
+    protected void init(Shapefile shapefile, ShapeAttributes normalAttrs, ShapeAttributes highlightAttrs,
+        ShapefileRenderable.AttributeDelegate attributeDelegate)
     {
-        if (shapefile == null)
-        {
-            String msg = Logging.getMessage("nullValue.ShapefileIsNull");
-            Logging.logger().severe(msg);
-            throw new IllegalArgumentException(msg);
-        }
-
         double[] boundingRect = shapefile.getBoundingRectangle();
-        this.sector = boundingRect != null ? Sector.fromDegrees(boundingRect) : null;
-        this.records = new ArrayList<ShapefileRenderable.Record>();
+        if (boundingRect == null) // suppress record assembly for empty shapefiles
+            return;
+
+        this.sector = Sector.fromDegrees(boundingRect);
+        this.initNormalAttrs = normalAttrs;
+        this.initHighlightAttrs = highlightAttrs;
+        this.initAttributeDelegate = attributeDelegate;
+        this.assembleRecords(shapefile);
     }
 
-    protected void assembleShapefileRecords(Shapefile shapefile)
+    protected void assembleRecords(Shapefile shapefile)
     {
+        this.records = new ArrayList<ShapefileRenderable.Record>();
+
         while (shapefile.hasNext())
         {
             ShapefileRecord shapefileRecord = shapefile.nextRecord();
 
-            if (this.mustAddShapefileRecord(shapefileRecord))
+            if (this.mustAssembleRecord(shapefileRecord))
             {
-                this.addShapefileRecord(shapefileRecord);
+                this.assembleRecord(shapefileRecord);
             }
         }
 
         this.records.trimToSize(); // Reduce memory overhead from unused ArrayList capacity.
     }
 
-    protected boolean mustAddShapefileRecord(ShapefileRecord shapefileRecord)
+    protected boolean mustAssembleRecord(ShapefileRecord shapefileRecord)
     {
         return shapefileRecord.getNumberOfParts() > 0
             && shapefileRecord.getNumberOfPoints() > 0
             && !Shapefile.isNullType(shapefileRecord.getShapeType());
     }
 
-    protected void addShapefileRecord(ShapefileRecord shapefileRecord)
+    protected void assembleRecord(ShapefileRecord shapefileRecord)
     {
-        this.records.add(new ShapefileRenderable.Record(this, shapefileRecord));
+        ShapefileRenderable.Record renderableRecord = new ShapefileRenderable.Record(this, shapefileRecord);
+        this.addRecord(shapefileRecord, renderableRecord);
+    }
+
+    protected void addRecord(ShapefileRecord shapefileRecord, ShapefileRenderable.Record renderableRecord)
+    {
+        renderableRecord.setAttributes(this.initNormalAttrs);
+        renderableRecord.setHighlightAttributes(this.initHighlightAttrs);
+
+        if (this.initAttributeDelegate != null)
+        {
+            this.initAttributeDelegate.assignAttributes(shapefileRecord, renderableRecord);
+        }
+
+        renderableRecord.ordinal = this.records.size();
+        this.records.add(renderableRecord);
     }
 
     public Sector getSector()
@@ -197,24 +260,30 @@ public abstract class ShapefileRenderable extends WWObjectImpl
 
     public int getRecordCount()
     {
+        if (this.records == null)
+            return 0;
+
         return this.records.size();
     }
 
-    public ShapefileRenderable.Record getRecord(int recordNumber)
+    public ShapefileRenderable.Record getRecord(int ordinal)
     {
-        if (recordNumber < 0 || recordNumber >= this.records.size())
+        if (this.records == null || ordinal < 0 || ordinal >= this.records.size())
         {
-            String msg = Logging.getMessage("generic.indexOutOfRange", recordNumber);
+            String msg = Logging.getMessage("generic.indexOutOfRange", ordinal);
             Logging.logger().severe(msg);
             throw new IllegalArgumentException(msg);
         }
 
-        return this.records.get(recordNumber);
+        return this.records.get(ordinal);
     }
 
     @Override
     public Iterator<ShapefileRenderable.Record> iterator()
     {
+        if (this.records == null)
+            return Collections.<ShapefileRenderable.Record>emptyList().iterator();
+
         return this.records.iterator();
     }
 

@@ -365,6 +365,8 @@ public class Path extends AbstractShape
      */
     protected static class PickablePositions
     {
+        // TODO: Replace this class with usage of PickSupport.addPickableObjectRange.
+
         /** The minimum color code, inclusive. */
         public final int minColorCode;
         /** The maximum color code, inclusive. */
@@ -400,6 +402,9 @@ public class Path extends AbstractShape
      */
     protected static class PathPickSupport extends PickSupport
     {
+        // TODO: Replace this subclass with usage of PickSupport.addPickableObjectRange.
+        // TODO: Take care to retain the behavior in doResolvePick below that merges multiple picks from a single path.
+
         /**
          * The list of Path pickable positions that this PathPickSupport is currently tracking. This list maps a range
          * of color codes to a Path, where the color codes represent the range of pick colors that the Path's position
@@ -1097,15 +1102,9 @@ public class Path extends AbstractShape
      * @return <code>true</code> if this Path's positions and the positions in between are located on the underlying
      * terrain, and <code>false</code> otherwise.
      */
-    protected boolean isSurfacePath()
+    protected boolean isSurfacePath(DrawContext dc)
     {
-        return this.getAltitudeMode() == WorldWind.CLAMP_TO_GROUND && this.isFollowTerrain();
-    }
-
-    @Override
-    protected SurfaceShape createSurfaceShape()
-    {
-        return null; // Path does not use a surface shape for 2D
+        return (this.getAltitudeMode() == WorldWind.CLAMP_TO_GROUND && this.isFollowTerrain()) || dc.is2DGlobe();
     }
 
     @Override
@@ -1205,7 +1204,7 @@ public class Path extends AbstractShape
     @Override
     protected void addOrderedRenderable(DrawContext dc)
     {
-        if (this.isSurfacePath())
+        if (this.isSurfacePath(dc))
         {
             dc.addOrderedRenderable(this, true); // Specify that this Path is behind other renderables.
         }
@@ -1238,7 +1237,7 @@ public class Path extends AbstractShape
 
         try
         {
-            if (this.isSurfacePath())
+            if (this.isSurfacePath(dc))
             {
                 // Pull the line forward just a bit to ensure it shows over the terrain.
                 dc.pushProjectionOffest(SURFACE_PATH_DEPTH_OFFSET);
@@ -1586,7 +1585,7 @@ public class Path extends AbstractShape
 
         FloatBuffer path = pathData.renderedPath;
 
-        if (this.getAltitudeMode() == WorldWind.CLAMP_TO_GROUND)
+        if (this.getAltitudeMode() == WorldWind.CLAMP_TO_GROUND || dc.is2DGlobe())
             path = this.computePointsRelativeToTerrain(dc, positions, 0d, path, pathData);
         else if (this.getAltitudeMode() == WorldWind.RELATIVE_TO_GROUND)
             path = this.computePointsRelativeToTerrain(dc, positions, null, path, pathData);
@@ -2150,7 +2149,7 @@ public class Path extends AbstractShape
         // This method does not add the first position of the segment to the position list. It adds only the
         // subsequent positions, including the segment's last position.
 
-        boolean straightLine = this.getPathType() == AVKey.LINEAR && !this.isFollowTerrain();
+        boolean straightLine = this.getPathType() == AVKey.LINEAR && !this.isSurfacePath(dc);
 
         double arcLength;
         if (straightLine)
@@ -2171,7 +2170,7 @@ public class Path extends AbstractShape
 
         for (double s = 0, p = 0; s < 1; )
         {
-            if (this.isFollowTerrain())
+            if (this.isFollowTerrain() || dc.is2DGlobe())
                 p += this.terrainConformance * dc.getView().computePixelSizeAtDistance(
                     ptA.distanceTo3(dc.getView().getEyePoint()));
             else
@@ -2475,6 +2474,35 @@ public class Path extends AbstractShape
 
         if (newPositions != null)
             this.setPositions(newPositions);
+    }
+
+    @Override
+    public void moveTo(Globe globe, Position position)
+    {
+        if (position == null)
+        {
+            String msg = Logging.getMessage("nullValue.PositionIsNull");
+            Logging.logger().severe(msg);
+            throw new IllegalArgumentException(msg);
+        }
+
+        if (this.numPositions == 0)
+            return;
+
+        Position oldPosition = this.getReferencePosition();
+
+        // The reference position is null if this Path has no positions. In this case moving the Path to a new
+        // reference position is meaningless because the Path has no geographic location. Therefore we fail softly
+        // by exiting and doing nothing.
+        if (oldPosition == null)
+            return;
+
+        List<Position> newPositions = Position.computeShiftedPositions(globe, oldPosition, position, this.positions);
+
+        if (newPositions != null)
+        {
+            this.setPositions(newPositions);
+        }
     }
 
     protected boolean isSmall(DrawContext dc, Vec4 ptA, Vec4 ptB, int numPixels)

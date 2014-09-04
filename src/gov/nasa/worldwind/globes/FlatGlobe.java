@@ -134,32 +134,6 @@ public class FlatGlobe extends EllipsoidalGlobe implements Globe2D
         return new FlatStateKey(this);
     }
 
-    @Override
-    public double getRadiusAt(Angle latitude, Angle longitude)
-    {
-        // TODO: Find a more accurate workaround than getMaximumRadius()
-        if (latitude == null || longitude == null)
-        {
-            String msg = Logging.getMessage("nullValue.AngleIsNull");
-            Logging.logger().severe(msg);
-            throw new IllegalArgumentException(msg);
-        }
-        return getMaximumRadius();
-    }
-
-    @Override
-    public double getRadiusAt(LatLon latLon)
-    {
-        // TODO: Find a more accurate workaround then getMaximumRadius()
-        if (latLon == null)
-        {
-            String msg = Logging.getMessage("nullValue.LatLonIsNull");
-            Logging.logger().severe(msg);
-            throw new IllegalArgumentException(msg);
-        }
-        return getMaximumRadius();
-    }
-
     /**
      * Set the projection used to project the globe onto a plane.
      *
@@ -380,20 +354,6 @@ public class FlatGlobe extends EllipsoidalGlobe implements Globe2D
     }
 
     @Override
-    public Matrix computeSurfaceOrientationAtPosition(Position position)
-    {
-        if (position == null)
-        {
-            String message = Logging.getMessage("nullValue.PositionIsNull");
-            Logging.logger().severe(message);
-            throw new IllegalArgumentException(message);
-        }
-
-        return this.computeSurfaceOrientationAtPosition(position.getLatitude(), position.getLongitude(),
-            position.getElevation());
-    }
-
-    @Override
     public double getElevation(Angle latitude, Angle longitude)
     {
         if (latitude == null || longitude == null)
@@ -434,6 +394,12 @@ public class FlatGlobe extends EllipsoidalGlobe implements Globe2D
 
         return this.projection.geographicToCartesian(this, latitude, longitude, metersElevation,
             this.offsetVector);
+    }
+
+    @Override
+    protected void geodeticToCartesian(Sector sector, int numLat, int numLon, double[] metersElevation, Vec4[] out)
+    {
+        this.projection.geographicToCartesian(this, sector, numLat, numLon, metersElevation, this.offsetVector, out);
     }
 
     @Override
