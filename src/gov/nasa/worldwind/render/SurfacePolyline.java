@@ -34,6 +34,19 @@ public class SurfacePolyline extends AbstractSurfaceShape implements Exportable
     }
 
     /**
+     * Creates a shallow copy of the specified source shape.
+     *
+     * @param source the shape to copy.
+     */
+    public SurfacePolyline(SurfacePolyline source)
+    {
+        super(source);
+
+        this.closed = source.closed;
+        this.locations = source.locations;
+    }
+
+    /**
      * Constructs a new surface polyline with the specified normal (as opposed to highlight) attributes and no
      * locations. Modifying the attribute reference after calling this constructor causes this shape's appearance to
      * change accordingly.
@@ -169,6 +182,17 @@ public class SurfacePolyline extends AbstractSurfaceShape implements Exportable
             Angle pathLength = LatLon.greatCircleDistance(oldReferencePosition, ll);
             newLocations.add(LatLon.greatCircleEndPosition(newReferencePosition, heading, pathLength));
         }
+
+        this.setLocations(newLocations);
+    }
+
+    protected void doMoveTo(Globe globe, Position oldReferencePosition, Position newReferencePosition)
+    {
+        if (this.locations == null)
+            return;
+
+        List<LatLon> newLocations = LatLon.computeShiftedLocations(globe, oldReferencePosition, newReferencePosition,
+            this.getLocations());
 
         this.setLocations(newLocations);
     }

@@ -14,23 +14,27 @@ import gov.nasa.worldwind.render.*;
 import gov.nasa.worldwind.util.*;
 import org.w3c.dom.Element;
 
+import javax.swing.*;
 import javax.xml.xpath.*;
 import java.awt.*;
 import java.util.Map;
 
 /**
  * Converts Shapefile geometry into World Wind renderable objects. Shapefile geometries are mapped to World Wind objects
- * as follows: <table> <tr><th>Shapefile Geometry</th><th>World Wind Object</th></tr> <tr><td>Point</td><td>{@link
+ * as follows:
+ * <p/>
+ * <table> <tr><th>Shapefile Geometry</th><th>World Wind Object</th></tr> <tr><td>Point</td><td>{@link
  * gov.nasa.worldwind.render.PointPlacemark}</td></tr> <tr><td>MultiPoint</td><td>List of {@link
  * gov.nasa.worldwind.render.PointPlacemark}</td></tr> <tr><td>Polyline</td><td>{@link
- * gov.nasa.worldwind.render.SurfacePolylines}</td></tr> <tr><td>Polygon</td><td>{@link
- * gov.nasa.worldwind.render.SurfacePolygons}</td></tr> </table> In addition, if the attributes file associated with the
- * shapefile has an attribute named "height" or "hgt", the shapes in the shapefile are mapped to {@link
- * gov.nasa.worldwind.formats.shapefile.ShapefileExtrudedPolygons}.
+ * gov.nasa.worldwind.formats.shapefile.ShapefilePolylines}</td></tr> <tr><td>Polygon</td><td>{@link
+ * gov.nasa.worldwind.formats.shapefile.ShapefilePolygons}</td></tr> </table>
+ * <p/>
+ * In addition, if the attributes file associated with the shapefile has an attribute named "height" or "hgt", the
+ * shapes in the shapefile are mapped to {@link gov.nasa.worldwind.formats.shapefile.ShapefileExtrudedPolygons}.
  * <p/>
  * The attributes applied to the created shapes may be specified to this class, either via the attribute accessors of
  * this class or a configuration file passed to {@link #createLayerFromConfigDocument(org.w3c.dom.Element,
- * gov.nasa.worldwind.avlist.AVList)}.
+ * gov.nasa.worldwind.avlist.AVList, Runnable)}.
  * <p/>
  * Shapefiles may have associated with them an attributes file. This class provides a mechanism for mapping attribute
  * names in that file to keys assigned to the created shapes. The mapping is specified as a key/value pair, the key is
@@ -157,17 +161,23 @@ public class ShapefileLayerFactory
      * Creates a {@link gov.nasa.worldwind.layers.Layer} from a general Shapefile layer configuration element. The
      * element may contain elements specifying shapefile attribute mappings, shape attributes to assign to created
      * shapes, and layer properties.
+     * <p/>
+     * This returns with the new layer immediately, but schedules Shapefile loading and shapefile geometry conversion on
+     * a separate thread. Shapefile geometry is added to the returned layer as it becomes available. Once loading
+     * completes, this executes the specified completionCallback if one is specified. The completion callback may
+     * therefore be used to determine when Shapefile loading and geometry conversion completes.
      *
-     * @param domElement The configuration element.
-     * @param params     Key/value pairs to associate with the created layer. Values specified here override
-     *                   corresponding values specified within the configuration element.
+     * @param domElement         The configuration element.
+     * @param params             Key/value pairs to associate with the created layer. Values specified here override
+     *                           corresponding values specified within the configuration element.
+     * @param completionCallback A runnable to execute when Shapefile loading completes. May be null.
      *
      * @return A Layer that renders the Shapefile's contents.
      *
      * @throws IllegalArgumentException if the element is null, or if the Shapefile's primitive type or projection is
      *                                  unrecognized.
      */
-    public Layer createLayerFromConfigDocument(Element domElement, AVList params)
+    public Layer createLayerFromConfigDocument(Element domElement, AVList params, final Runnable completionCallback)
     {
         if (domElement == null)
         {
@@ -176,7 +186,7 @@ public class ShapefileLayerFactory
             throw new IllegalArgumentException(message);
         }
 
-        String shapefileLocation = WWXML.getText(domElement, "ShapefileLocation");
+        final String shapefileLocation = WWXML.getText(domElement, "ShapefileLocation");
         if (WWUtil.isEmpty(shapefileLocation))
         {
             String message = Logging.getMessage("SHP.ShapefileLocationUnspecified");
@@ -184,72 +194,86 @@ public class ShapefileLayerFactory
             return null;
         }
 
-        Shapefile shp = null;
-        Layer layer = null;
-        try
+        final RenderableLayer layer = new RenderableLayer();
+
+        if (params == null)
+            params = new AVListImpl();
+
+        // Common layer properties.
+        AbstractLayer.getLayerConfigParams(domElement, params);
+        layer.setValues(params);
+
+        XPathFactory xpFactory = XPathFactory.newInstance();
+        XPath xpath = xpFactory.newXPath();
+
+        this.setDBaseMappings(this.collectDBaseMappings(domElement, xpath));
+
+        Element element = WWXML.getElement(domElement, "NormalShapeAttributes", xpath);
+        this.setNormalShapeAttributes(element != null ? this.collectShapeAttributes(element) : null);
+
+        element = WWXML.getElement(domElement, "HighlightShapeAttributes", xpath);
+        this.setHighlightShapeAttributes(element != null ? this.collectShapeAttributes(element) : null);
+
+        element = WWXML.getElement(domElement, "NormalPointAttributes", xpath);
+        this.setNormalPointAttributes(element != null ? this.collectPointAttributes(element) : null);
+
+        element = WWXML.getElement(domElement, "HighlightPointAttributes", xpath);
+        this.setHighlightPointAttributes(element != null ? this.collectPointAttributes(element) : null);
+
+        Double d = (Double) params.getValue(AVKey.OPACITY);
+        if (d != null)
+            layer.setOpacity(d);
+
+        d = (Double) params.getValue(AVKey.MAX_ACTIVE_ALTITUDE);
+        if (d != null)
+            layer.setMaxActiveAltitude(d);
+
+        d = (Double) params.getValue(AVKey.MIN_ACTIVE_ALTITUDE);
+        if (d != null)
+            layer.setMinActiveAltitude(d);
+
+        Boolean b = (Boolean) params.getValue(AVKey.PICK_ENABLED);
+        if (b != null)
+            layer.setPickEnabled(b);
+
+        WorldWind.getScheduledTaskService().addTask(new Runnable()
         {
-            shp = new Shapefile(shapefileLocation);
-
-            if (params == null)
-                params = new AVListImpl();
-
-            // Common layer properties.
-            AbstractLayer.getLayerConfigParams(domElement, params);
-
-            XPathFactory xpFactory = XPathFactory.newInstance();
-            XPath xpath = xpFactory.newXPath();
-
-            this.setDBaseMappings(this.collectDBaseMappings(domElement, xpath));
-
-            Element element = WWXML.getElement(domElement, "NormalShapeAttributes", xpath);
-            this.setNormalShapeAttributes(element != null ? this.collectShapeAttributes(element) : null);
-
-            element = WWXML.getElement(domElement, "HighlightShapeAttributes", xpath);
-            this.setHighlightShapeAttributes(element != null ? this.collectShapeAttributes(element) : null);
-
-            element = WWXML.getElement(domElement, "NormalPointAttributes", xpath);
-            this.setNormalPointAttributes(element != null ? this.collectPointAttributes(element) : null);
-
-            element = WWXML.getElement(domElement, "HighlightPointAttributes", xpath);
-            this.setHighlightPointAttributes(element != null ? this.collectPointAttributes(element) : null);
-
-            layer = this.createLayerFromShapefile(shp);
-            layer.setValues(params);
-
-            Double d = (Double) params.getValue(AVKey.OPACITY);
-            if (d != null)
-                layer.setOpacity(d);
-
-            d = (Double) params.getValue(AVKey.MAX_ACTIVE_ALTITUDE);
-            if (d != null)
-                layer.setMaxActiveAltitude(d);
-
-            d = (Double) params.getValue(AVKey.MIN_ACTIVE_ALTITUDE);
-            if (d != null)
-                layer.setMinActiveAltitude(d);
-
-            Boolean b = (Boolean) params.getValue(AVKey.PICK_ENABLED);
-            if (b != null)
-                layer.setPickEnabled(b);
-        }
-        finally
-        {
-            WWIO.closeStream(shp, shapefileLocation);
-        }
+            @Override
+            public void run()
+            {
+                Shapefile shp = null;
+                try
+                {
+                    shp = new Shapefile(shapefileLocation);
+                    addRenderablesForShapefile(shp, layer);
+                }
+                finally
+                {
+                    WWIO.closeStream(shp, shapefileLocation);
+                    runCompletionCallback(completionCallback);
+                }
+            }
+        });
 
         return layer;
     }
 
     /**
      * Creates a {@link gov.nasa.worldwind.layers.Layer} from a general Shapefile.
+     * <p/>
+     * This returns with the new layer immediately, but schedules Shapefile loading and shapefile geometry conversion on
+     * a separate thread. Shapefile geometry is added to the returned layer as it becomes available. Once loading
+     * completes, this executes the specified completionCallback if one is specified. The completion callback may
+     * therefore be used to determine when Shapefile loading and geometry conversion completes.
      *
-     * @param shp the Shapefile to create a layer for.
+     * @param shp                the Shapefile to create a layer for.
+     * @param completionCallback A runnable to execute when Shapefile loading completes. May be null.
      *
      * @return A Layer that renders the Shapefile's contents.
      *
      * @throws IllegalArgumentException if the Shapefile is null, or if the Shapefile's primitive type is unrecognized.
      */
-    public Layer createLayerFromShapefile(Shapefile shp)
+    public Layer createLayerFromShapefile(final Shapefile shp, final Runnable completionCallback)
     {
         if (shp == null)
         {
@@ -258,37 +282,23 @@ public class ShapefileLayerFactory
             throw new IllegalArgumentException(message);
         }
 
-        Layer layer = null;
+        final RenderableLayer layer = new RenderableLayer();
 
-        if (Shapefile.isPointType(shp.getShapeType()))
+        WorldWind.getScheduledTaskService().addTask(new Runnable()
         {
-            layer = new RenderableLayer();
-            this.addRenderablesForPoints(shp, (RenderableLayer) layer);
-        }
-        else if (Shapefile.isMultiPointType(shp.getShapeType()))
-        {
-            layer = new RenderableLayer();
-            this.addRenderablesForMultiPoints(shp, (RenderableLayer) layer);
-        }
-        else if (Shapefile.isPolylineType(shp.getShapeType()))
-        {
-            layer = new RenderableLayer();
-            this.addRenderablesForPolylines(shp, (RenderableLayer) layer);
-        }
-        else if (Shapefile.isPolygonType(shp.getShapeType()))
-        {
-            layer = new RenderableLayer();
-            this.addRenderablesForPolygons(shp, (RenderableLayer) layer);
-        }
-        else
-        {
-            Logging.logger().warning(Logging.getMessage("generic.UnrecognizedShapeType", shp.getShapeType()));
-        }
-
-        if (layer != null && shp.getBoundingRectangle() != null)
-        {
-            layer.setValue(AVKey.SECTOR, Sector.fromDegrees(shp.getBoundingRectangle()));
-        }
+            @Override
+            public void run()
+            {
+                try
+                {
+                    addRenderablesForShapefile(shp, layer);
+                }
+                finally
+                {
+                    runCompletionCallback(completionCallback);
+                }
+            }
+        });
 
         return layer;
     }
@@ -298,15 +308,21 @@ public class ShapefileLayerFactory
      * the following: <ul> <li>{@link java.io.InputStream}</li> <li>{@link java.net.URL}</li> <li>{@link
      * java.io.File}</li> <li>{@link String} containing a valid URL description or a file or resource name available on
      * the classpath.</li> </ul>
+     * <p/>
+     * This returns with the new layer immediately, but schedules Shapefile loading and shapefile geometry conversion on
+     * a separate thread. Shapefile geometry is added to the returned layer as it becomes available. Once loading
+     * completes, this executes the specified completionCallback if one is specified. The completion callback may
+     * therefore be used to determine when Shapefile loading and geometry conversion completes.
      *
-     * @param source the source of the Shapefile.
+     * @param source             the source of the Shapefile.
+     * @param completionCallback A runnable to execute when Shapefile loading completes. May be null.
      *
      * @return A Layer that renders the Shapefile's contents.
      *
      * @throws IllegalArgumentException if the source is null or an empty string, or if the Shapefile's primitive type
      *                                  is unrecognized.
      */
-    public Layer createLayerFromSource(Object source)
+    public Layer createLayerFromSource(final Object source, final Runnable completionCallback)
     {
         if (WWUtil.isEmpty(source))
         {
@@ -315,17 +331,26 @@ public class ShapefileLayerFactory
             throw new IllegalArgumentException(message);
         }
 
-        Shapefile shp = null;
-        Layer layer = null;
-        try
+        final RenderableLayer layer = new RenderableLayer();
+
+        WorldWind.getScheduledTaskService().addTask(new Runnable()
         {
-            shp = new Shapefile(source);
-            layer = this.createLayerFromShapefile(shp);
-        }
-        finally
-        {
-            WWIO.closeStream(shp, source.toString());
-        }
+            @Override
+            public void run()
+            {
+                Shapefile shp = null;
+                try
+                {
+                    shp = new Shapefile(source);
+                    addRenderablesForShapefile(shp, layer);
+                }
+                finally
+                {
+                    WWIO.closeStream(shp, source.toString());
+                    runCompletionCallback(completionCallback);
+                }
+            }
+        });
 
         return layer;
     }
@@ -440,9 +465,36 @@ public class ShapefileLayerFactory
         return shapeAttributes;
     }
 
-    //**************************************************************//
-    //********************  Geometry Conversion  *******************//
-    //**************************************************************//
+    protected void addRenderablesForShapefile(Shapefile shp, RenderableLayer layer)
+    {
+        if (Shapefile.isPointType(shp.getShapeType()))
+        {
+            this.addRenderablesForPoints(shp, layer);
+        }
+        else if (Shapefile.isMultiPointType(shp.getShapeType()))
+        {
+            this.addRenderablesForMultiPoints(shp, layer);
+        }
+        else if (Shapefile.isPolylineType(shp.getShapeType()))
+        {
+            this.addRenderablesForPolylines(shp, layer);
+        }
+        else if (Shapefile.isPolygonType(shp.getShapeType()))
+        {
+            this.addRenderablesForPolygons(shp, layer);
+        }
+        else
+        {
+            Logging.logger().warning(Logging.getMessage("generic.UnrecognizedShapeType", shp.getShapeType()));
+        }
+
+        if (shp.getBoundingRectangle() != null)
+        {
+            layer.setValue(AVKey.SECTOR, Sector.fromDegrees(shp.getBoundingRectangle()));
+        }
+
+        layer.firePropertyChange(AVKey.LAYER, null, layer);
+    }
 
     protected void addRenderablesForPoints(Shapefile shp, RenderableLayer layer)
     {
@@ -481,6 +533,23 @@ public class ShapefileLayerFactory
         }
     }
 
+    @SuppressWarnings({"UnusedDeclaration"})
+    protected Renderable createPoint(ShapefileRecord record, double latDegrees, double lonDegrees, AVList mappings)
+    {
+        PointPlacemark placemark = new PointPlacemark(Position.fromDegrees(latDegrees, lonDegrees, 0));
+        placemark.setAltitudeMode(WorldWind.CLAMP_TO_GROUND);
+
+        if (this.normalPointAttributes != null)
+            placemark.setAttributes(this.normalPointAttributes);
+        if (this.highlightPointAttributes != null)
+            placemark.setHighlightAttributes(this.highlightPointAttributes);
+
+        if (mappings != null)
+            placemark.setValues(mappings);
+
+        return placemark;
+    }
+
     protected void addRenderablesForPolylines(Shapefile shp, RenderableLayer layer)
     {
         ShapefilePolylines shape = new ShapefilePolylines(shp, this.normalShapeAttributes,
@@ -515,8 +584,7 @@ public class ShapefileLayerFactory
 
     protected void addRenderablesForSurfacePolygons(Shapefile shp, RenderableLayer layer)
     {
-        // TODO: Implement ShapefilePolygons and use it here.
-        ShapefilePolylines shape = new ShapefilePolylines(shp, this.normalShapeAttributes,
+        ShapefilePolygons shape = new ShapefilePolygons(shp, this.normalShapeAttributes,
             this.highlightShapeAttributes, new ShapefileRenderable.AttributeDelegate()
         {
             @Override
@@ -570,134 +638,11 @@ public class ShapefileLayerFactory
         return mappings.getEntries().size() > 0 ? mappings : null;
     }
 
-    //**************************************************************//
-    //********************  Primitive Geometry Construction  *******//
-    //**************************************************************//
-
-    @SuppressWarnings({"UnusedDeclaration"})
-    protected Renderable createPoint(ShapefileRecord record, double latDegrees, double lonDegrees, AVList mappings)
+    protected void runCompletionCallback(Runnable callback)
     {
-        PointPlacemark placemark = new PointPlacemark(Position.fromDegrees(latDegrees, lonDegrees, 0));
-        placemark.setAltitudeMode(WorldWind.CLAMP_TO_GROUND);
-
-        if (this.normalPointAttributes != null)
-            placemark.setAttributes(this.normalPointAttributes);
-        if (this.highlightPointAttributes != null)
-            placemark.setHighlightAttributes(this.highlightPointAttributes);
-
-        if (mappings != null)
-            placemark.setValues(mappings);
-
-        return placemark;
-    }
-
-    protected Renderable createPolyline(Shapefile shp, AVList mappings)
-    {
-        SurfacePolylines shape = new SurfacePolylines(Sector.fromDegrees(shp.getBoundingRectangle()),
-            shp.getPointBuffer());
-
-        if (this.normalShapeAttributes != null)
-            shape.setAttributes(this.normalShapeAttributes);
-        if (this.highlightShapeAttributes != null)
-            shape.setHighlightAttributes(this.highlightShapeAttributes);
-
-        if (mappings != null)
-            shape.setValues(mappings);
-
-        return shape;
-    }
-
-    protected void createPolygon(ShapefileRecord record, AVList mappings, RenderableLayer layer)
-    {
-        Double height = ShapefileUtils.extractHeightAttribute(record);
-        if (height != null) // create extruded polygons
+        if (callback != null)
         {
-            ExtrudedPolygon ep = new ExtrudedPolygon(height);
-
-            if (this.normalShapeAttributes != null)
-                ep.setAttributes(this.normalShapeAttributes);
-            if (this.highlightShapeAttributes != null)
-                ep.setHighlightAttributes(this.highlightShapeAttributes);
-
-            if (mappings != null)
-                ep.setValues(mappings);
-
-            layer.addRenderable(ep);
-
-            for (int i = 0; i < record.getNumberOfParts(); i++)
-            {
-                // Although the shapefile spec says that inner and outer boundaries can be listed in any order, it's
-                // assumed here that inner boundaries are at least listed adjacent to their outer boundary, either
-                // before or after it. The below code accumulates inner boundaries into the extruded polygon until an
-                // outer boundary comes along. If the outer boundary comes before the inner boundaries, the inner
-                // boundaries are added to the polygon until another outer boundary comes along, at which point a new
-                // extruded polygon is started.
-
-                VecBuffer buffer = record.getCompoundPointBuffer().subBuffer(i);
-                if (WWMath.computeWindingOrderOfLocations(buffer.getLocations()).equals(AVKey.CLOCKWISE))
-                {
-                    if (!ep.getOuterBoundary().iterator().hasNext()) // has no outer boundary yet
-                    {
-                        ep.setOuterBoundary(buffer.getLocations());
-                    }
-                    else
-                    {
-                        ep = new ExtrudedPolygon();
-
-                        if (this.normalShapeAttributes != null)
-                            ep.setAttributes(this.normalShapeAttributes);
-                        if (this.highlightShapeAttributes != null)
-                            ep.setHighlightAttributes(this.highlightShapeAttributes);
-
-                        if (mappings != null)
-                            ep.setValues(mappings);
-
-                        ep.setOuterBoundary(record.getCompoundPointBuffer().getLocations());
-                        layer.addRenderable(ep);
-                    }
-                }
-                else
-                {
-                    ep.addInnerBoundary(buffer.getLocations());
-                }
-            }
-        }
-        else // create surface polygons
-        {
-            SurfacePolygons shape = new SurfacePolygons(
-                Sector.fromDegrees(((ShapefileRecordPolygon) record).getBoundingRectangle()),
-                record.getCompoundPointBuffer());
-
-            if (this.normalShapeAttributes != null)
-                shape.setAttributes(this.normalShapeAttributes);
-            if (this.highlightShapeAttributes != null)
-                shape.setHighlightAttributes(this.highlightShapeAttributes);
-
-            if (mappings != null)
-                shape.setValues(mappings);
-
-            // Configure the SurfacePolygons as a single large polygon.
-            // Configure the SurfacePolygons to correctly interpret the Shapefile polygon record. Shapefile polygons may
-            // have rings defining multiple inner and outer boundaries. Each ring's winding order defines whether it's an
-            // outer boundary or an inner boundary: outer boundaries have a clockwise winding order. However, the
-            // arrangement of each ring within the record is not significant; inner rings can precede outer rings and vice
-            // versa.
-            //
-            // By default, SurfacePolygons assumes that the sub-buffers are arranged such that each outer boundary precedes
-            // a set of corresponding inner boundaries. SurfacePolygons traverses the sub-buffers and tessellates a new
-            // polygon each  time it encounters an outer boundary. Outer boundaries are sub-buffers whose winding order
-            // matches the SurfacePolygons' windingRule property.
-            //
-            // This default behavior does not work with Shapefile polygon records, because the sub-buffers of a Shapefile
-            // polygon record can be arranged arbitrarily. By calling setPolygonRingGroups(new int[]{0}), the
-            // SurfacePolygons interprets all sub-buffers as boundaries of a single tessellated shape, and configures the
-            // GLU tessellator's winding rule to correctly interpret outer and inner boundaries (in any arrangement)
-            // according to their winding order. We set the SurfacePolygons' winding rule to clockwise so that sub-buffers
-            // with a clockwise winding ordering are interpreted as outer boundaries.
-            shape.setWindingRule(AVKey.CLOCKWISE);
-            shape.setPolygonRingGroups(new int[] {0});
-            shape.setPolygonRingGroups(new int[] {0});
-            layer.addRenderable(shape);
+            SwingUtilities.invokeLater(callback);
         }
     }
 }

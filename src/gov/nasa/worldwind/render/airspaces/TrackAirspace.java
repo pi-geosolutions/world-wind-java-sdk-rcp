@@ -40,6 +40,20 @@ public class TrackAirspace extends AbstractAirspace
     {
     }
 
+    public TrackAirspace(TrackAirspace source)
+    {
+        super(source);
+
+        this.legs = new ArrayList<Box>(source.legs.size());
+        for (Box leg : source.legs)
+        {
+            this.legs.add(new Box(leg));
+        }
+
+        this.enableInnerCaps = source.enableInnerCaps;
+        this.smallAngleThreshold = source.smallAngleThreshold;
+    }
+
     public List<Box> getLegs()
     {
         return Collections.unmodifiableList(this.legs);
@@ -286,6 +300,31 @@ public class TrackAirspace extends AbstractAirspace
         }
     }
 
+    protected void doMoveTo(Globe globe, Position oldRef, Position newRef)
+    {
+        if (oldRef == null)
+        {
+            String message = "nullValue.OldRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+        if (newRef == null)
+        {
+            String message = "nullValue.NewRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+
+        // Don't call super.moveTo(). Each box should move itself according to the properties it was constructed with.
+        for (Box box : this.legs)
+        {
+            box.doMoveTo(globe, oldRef, newRef);
+        }
+
+        this.invalidateAirspaceData();
+        this.setLegsOutOfDate();
+    }
+
     protected void doMoveTo(Position oldRef, Position newRef)
     {
         if (oldRef == null)
@@ -380,7 +419,7 @@ public class TrackAirspace extends AbstractAirspace
      *
      * @return <code>true</code> if the legs must be joined, otherwise <code>false</code>.
      */
-    protected boolean mustJoinLegs(Box leg1, Box leg2)
+    public boolean mustJoinLegs(Box leg1, Box leg2)
     {
         LatLon[] leg1Loc = leg1.getLocations();
         LatLon[] leg2Loc = leg2.getLocations();
@@ -643,6 +682,8 @@ public class TrackAirspace extends AbstractAirspace
         if (!this.isVisible())
             return;
 
+        this.determineActiveAttributes(dc);
+
         // Update the child leg vertices if they're out of date. Since the leg vertices are used to determine how each
         // leg is shaped with respect to its neighbors, the vertices must be current before rendering each leg.
         if (this.isLegsOutOfDate(dc))
@@ -654,7 +695,7 @@ public class TrackAirspace extends AbstractAirspace
         {
             // Synchronize the leg's attributes with this track's attributes, and setup this track as the leg's pick
             // delegate.
-            leg.setAttributes(this.getAttributes());
+            leg.setAttributes(this.getActiveAttributes());
             leg.setDelegateOwner(this.getDelegateOwner() != null ? this.getDelegateOwner() : this);
             leg.preRender(dc);
         }

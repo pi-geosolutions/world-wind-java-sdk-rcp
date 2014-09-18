@@ -39,7 +39,7 @@ import java.util.List;
  * @author dcollins
  * @version $Id$
  */
-public abstract class AbstractSurfaceShape extends AbstractSurfaceObject implements SurfaceShape, Movable
+public abstract class AbstractSurfaceShape extends AbstractSurfaceObject implements SurfaceShape, Movable, Movable2
 {
     /** The default interior color. */
     protected static final Material DEFAULT_INTERIOR_MATERIAL = Material.PINK;
@@ -100,6 +100,24 @@ public abstract class AbstractSurfaceShape extends AbstractSurfaceObject impleme
     public AbstractSurfaceShape(ShapeAttributes normalAttrs)
     {
         this.setAttributes(normalAttrs);
+    }
+
+    /**
+     * Creates a shallow copy of the specified source shape.
+     *
+     * @param source the shape to copy.
+     */
+    public AbstractSurfaceShape(AbstractSurfaceShape source)
+    {
+        super(source);
+
+        this.highlighted = source.highlighted;
+        this.normalAttrs = source.normalAttrs;
+        this.highlightAttrs = source.highlightAttrs;
+        this.pathType = source.pathType;
+        this.texelsPerEdgeInterval = source.texelsPerEdgeInterval;
+        this.minEdgeIntervals = source.minEdgeIntervals;
+        this.maxEdgeIntervals = source.maxEdgeIntervals;
     }
 
     /** {@inheritDoc} */
@@ -513,9 +531,26 @@ public abstract class AbstractSurfaceShape extends AbstractSurfaceObject impleme
         this.doMoveTo(oldReferencePosition, position);
     }
 
+    public void moveTo(Globe globe, Position position)
+    {
+        if (position == null)
+        {
+            String message = Logging.getMessage("nullValue.PositionIsNull");
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+
+        Position oldReferencePosition = this.getReferencePosition();
+        if (oldReferencePosition == null)
+            return;
+
+        this.doMoveTo(globe, oldReferencePosition, position);
+    }
+
     public abstract Position getReferencePosition();
 
     protected abstract void doMoveTo(Position oldReferencePosition, Position newReferencePosition);
+    protected abstract void doMoveTo(Globe globe, Position oldReferencePosition, Position newReferencePosition);
 
     protected void onShapeChanged()
     {

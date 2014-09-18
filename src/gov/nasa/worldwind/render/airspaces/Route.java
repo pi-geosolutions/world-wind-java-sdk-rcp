@@ -7,6 +7,7 @@
 package gov.nasa.worldwind.render.airspaces;
 
 import gov.nasa.worldwind.geom.*;
+import gov.nasa.worldwind.globes.Globe;
 import gov.nasa.worldwind.util.*;
 
 import java.util.*;
@@ -43,6 +44,19 @@ public class Route extends TrackAirspace
     public Route()
     {
         this.setEnableInnerCaps(false);
+    }
+
+    public Route(Route source)
+    {
+        super(source);
+
+        this.locations = new ArrayList<LatLon>(source.locations.size());
+        for (LatLon location : source.locations)
+        {
+            this.locations.add(location);
+        }
+
+        this.width = source.width;
     }
 
     public Iterable<? extends LatLon> getLocations()
@@ -155,6 +169,25 @@ public class Route extends TrackAirspace
     public Position getReferencePosition()
     {
         return this.computeReferencePosition(this.locations, this.getAltitudes());
+    }
+
+    protected void doMoveTo(Globe globe, Position oldRef, Position newRef)
+    {
+        if (oldRef == null)
+        {
+            String message = "nullValue.OldRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+        if (newRef == null)
+        {
+            String message = "nullValue.NewRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+
+        List<LatLon> newLocations = LatLon.computeShiftedLocations(globe, oldRef, newRef, this.getLocations());
+        this.setLocations(newLocations);
     }
 
     protected void doMoveTo(Position oldRef, Position newRef)

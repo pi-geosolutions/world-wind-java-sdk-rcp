@@ -31,6 +31,17 @@ public class Polygon extends AbstractAirspace
     private boolean enableCaps = true;
     private int subdivisions = DEFAULT_SUBDIVISIONS;
 
+    public Polygon(Polygon source)
+    {
+        super(source);
+
+        this.enableCaps = source.enableCaps;
+        this.subdivisions = source.subdivisions;
+
+        this.addLocations(source.locations);
+        this.makeDefaultDetailLevels();
+    }
+
     public Polygon(Iterable<? extends LatLon> locations)
     {
         this.addLocations(locations);
@@ -159,6 +170,27 @@ public class Polygon extends AbstractAirspace
         return points;
     }
 
+    protected void doMoveTo(Globe globe, Position oldRef, Position newRef)
+    {
+        if (oldRef == null)
+        {
+            String message = "nullValue.OldRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+        if (newRef == null)
+        {
+            String message = "nullValue.NewRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+
+        List<LatLon> newLocations = LatLon.computeShiftedLocations(globe, oldRef, newRef, this.getLocations());
+        this.setLocations(newLocations);
+
+        super.doMoveTo(oldRef, newRef);
+    }
+
     protected void doMoveTo(Position oldRef, Position newRef)
     {
         if (oldRef == null)
@@ -199,7 +231,7 @@ public class Polygon extends AbstractAirspace
     {
         super.updateSurfaceShape(dc, shape);
 
-        boolean mustDrawInterior = this.getAttributes().isDrawInterior() && this.isEnableCaps();
+        boolean mustDrawInterior = this.getActiveAttributes().isDrawInterior() && this.isEnableCaps();
         shape.getAttributes().setDrawInterior(mustDrawInterior); // suppress the shape interior when caps are disabled
     }
 

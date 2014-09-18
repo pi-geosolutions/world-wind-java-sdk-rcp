@@ -87,7 +87,8 @@ public class BasicAirspaceAttributes extends BasicShapeAttributes implements Air
     }
 
     /**
-     * Creates a new <code>BasicAirspaceAttributes</code> configured with the specified <code>attributes</code>.
+     * Creates a new <code>BasicAirspaceAttributes</code> configured with the specified
+     * {@link gov.nasa.worldwind.render.ShapeAttributes}.
      *
      * @param attributes the attributes to configure the new <code>BasicAirspaceAttributes</code> with.
      *
@@ -96,6 +97,30 @@ public class BasicAirspaceAttributes extends BasicShapeAttributes implements Air
     public BasicAirspaceAttributes(ShapeAttributes attributes)
     {
         super(attributes);
+    }
+
+    /**
+     * Creates a new <code>BasicAirspaceAttributes</code> configured with the specified <code>attributes</code>.
+     *
+     * @param attributes the attributes to configure the new <code>BasicAirspaceAttributes</code> with.
+     *
+     * @throws IllegalArgumentException if <code>attributes</code> is <code>null</code>.
+     */
+    public BasicAirspaceAttributes(AirspaceAttributes attributes)
+    {
+        super(attributes);
+    }
+
+    /** {@inheritDoc} */
+    public AirspaceAttributes copy()
+    {
+        return new BasicAirspaceAttributes(this);
+    }
+
+    /** {@inheritDoc} */
+    public void copy(AirspaceAttributes attributes)
+    {
+        super.copy(attributes);
     }
 
     /**

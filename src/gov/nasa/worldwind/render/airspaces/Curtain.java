@@ -49,6 +49,18 @@ public class Curtain extends AbstractAirspace
         this.makeDefaultDetailLevels();
     }
 
+    public Curtain(Curtain source)
+    {
+        super(source);
+
+        this.addLocations(source.locations);
+        this.pathType = source.pathType;
+        this.splitThreshold = source.splitThreshold;
+        this.applyPositionAltitude = source.applyPositionAltitude;
+
+        this.makeDefaultDetailLevels();
+    }
+
     protected void makeDefaultDetailLevels()
     {
         List<DetailLevel> levels = new ArrayList<DetailLevel>();
@@ -191,10 +203,10 @@ public class Curtain extends AbstractAirspace
 
         // Display the airspace's interior color when its outline is disabled but its interior is enabled. This causes
         // the surface shape to display the color most similar to the 3D airspace.
-        if (!this.getAttributes().isDrawOutline() && this.getAttributes().isDrawInterior())
+        if (!this.getActiveAttributes().isDrawOutline() && this.getActiveAttributes().isDrawInterior())
         {
             shape.getAttributes().setDrawOutline(true);
-            shape.getAttributes().setOutlineMaterial(this.getAttributes().getInteriorMaterial());
+            shape.getAttributes().setOutlineMaterial(this.getActiveAttributes().getInteriorMaterial());
         }
     }
 
@@ -203,6 +215,27 @@ public class Curtain extends AbstractAirspace
     {
         ((SurfacePolyline) this.surfaceShape).setLocations(this.getLocations());
         this.surfaceShape.setPathType(this.getPathType());
+    }
+
+    protected void doMoveTo(Globe globe, Position oldRef, Position newRef)
+    {
+        if (oldRef == null)
+        {
+            String message = "nullValue.OldRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+        if (newRef == null)
+        {
+            String message = "nullValue.NewRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+
+        List<LatLon> newLocations = LatLon.computeShiftedLocations(globe, oldRef, newRef, this.getLocations());
+        this.setLocations(newLocations);
+
+        super.doMoveTo(oldRef, newRef);
     }
 
     protected void doMoveTo(Position oldRef, Position newRef)

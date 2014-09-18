@@ -64,6 +64,17 @@ public class SphereAirspace extends AbstractAirspace
         this.makeDefaultDetailLevels();
     }
 
+    public SphereAirspace(SphereAirspace source)
+    {
+        super(source);
+
+        this.location = source.location;
+        this.radius = source.radius;
+        this.subdivisions = source.subdivisions;
+
+        this.makeDefaultDetailLevels();
+    }
+
     private void makeDefaultDetailLevels()
     {
         List<DetailLevel> levels = new ArrayList<DetailLevel>();
@@ -247,6 +258,29 @@ public class SphereAirspace extends AbstractAirspace
         Vec4 centerPoint = this.computePointFromPosition(dc, this.location.getLatitude(), this.location.getLongitude(),
             altitude, terrainConformant);
         return new Sphere(centerPoint, radius);
+    }
+
+    protected void doMoveTo(Globe globe, Position oldRef, Position newRef)
+    {
+        if (oldRef == null)
+        {
+            String message = "nullValue.OldRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+        if (newRef == null)
+        {
+            String message = "nullValue.NewRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+
+        List<LatLon> locations = new ArrayList<LatLon>(1);
+        locations.add(this.getLocation());
+        List<LatLon> newLocations = LatLon.computeShiftedLocations(globe, oldRef, newRef, locations);
+        this.setLocation(newLocations.get(0));
+
+        super.doMoveTo(oldRef, newRef);
     }
 
     protected void doMoveTo(Position oldRef, Position newRef)

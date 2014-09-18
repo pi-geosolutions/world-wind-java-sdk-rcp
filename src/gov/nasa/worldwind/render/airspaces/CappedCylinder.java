@@ -59,6 +59,20 @@ public class CappedCylinder extends AbstractAirspace
         this.makeDefaultDetailLevels();
     }
 
+    public CappedCylinder(CappedCylinder source)
+    {
+        super(source);
+
+        this.center = source.center;
+        this.innerRadius = source.innerRadius;
+        this.outerRadius = source.outerRadius;
+        this.enableCaps = source.enableCaps;
+        this.slices = source.slices;
+        this.loops = source.loops;
+
+        this.makeDefaultDetailLevels();
+    }
+
     public CappedCylinder(AirspaceAttributes attributes)
     {
         super(attributes);
@@ -291,6 +305,29 @@ public class CappedCylinder extends AbstractAirspace
         return points;
     }
 
+    protected void doMoveTo(Globe globe, Position oldRef, Position newRef)
+    {
+        if (oldRef == null)
+        {
+            String message = "nullValue.OldRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+        if (newRef == null)
+        {
+            String message = "nullValue.NewRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+
+        List<LatLon> oldLocations = new ArrayList<LatLon>(1);
+        oldLocations.add(this.getCenter());
+        List<LatLon> newLocations = LatLon.computeShiftedLocations(globe, oldRef, newRef, oldLocations);
+        this.setCenter(newLocations.get(0));
+
+        super.doMoveTo(oldRef, newRef);
+    }
+
     protected void doMoveTo(Position oldRef, Position newRef)
     {
         if (oldRef == null)
@@ -325,7 +362,7 @@ public class CappedCylinder extends AbstractAirspace
     {
         super.updateSurfaceShape(dc, shape);
 
-        boolean mustDrawInterior = this.getAttributes().isDrawInterior() && this.isEnableCaps();
+        boolean mustDrawInterior = this.getActiveAttributes().isDrawInterior() && this.isEnableCaps();
         shape.getAttributes().setDrawInterior(mustDrawInterior); // suppress the shape interior when caps are disabled
     }
 

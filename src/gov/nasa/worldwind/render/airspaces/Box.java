@@ -121,6 +121,24 @@ public class Box extends AbstractAirspace
         this.makeDefaultDetailLevels();
     }
 
+    public Box(Box source)
+    {
+        super(source);
+
+        this.location1 = source.location1;
+        this.location2 = source.location2;
+        this.leftWidth = source.leftWidth;
+        this.rightWidth = source.rightWidth;
+        this.enableStartCap = source.enableStartCap;
+        this.enableEndCap = source.enableEndCap;
+        this.forceCullFace = source.forceCullFace;
+        this.pillars = source.pillars;
+        this.stacks = source.stacks;
+        this.heightStacks = source.heightStacks;
+
+        this.makeDefaultDetailLevels();
+    }
+
     public Box(AirspaceAttributes attributes)
     {
         super(attributes);
@@ -522,6 +540,31 @@ public class Box extends AbstractAirspace
         locations[3] = globe.computePositionFromEllipsoidalPoint(verts[B_LOW_LEFT]);
         ((SurfaceBox) shape).setVertices(locations);
         ((SurfaceBox) shape).setEnableCaps(this.enableStartCap, this.enableEndCap);
+    }
+
+    protected void doMoveTo(Globe globe, Position oldRef, Position newRef)
+    {
+        if (oldRef == null)
+        {
+            String message = "nullValue.OldRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+        if (newRef == null)
+        {
+            String message = "nullValue.NewRefIsNull";
+            Logging.logger().severe(message);
+            throw new IllegalArgumentException(message);
+        }
+
+        List<LatLon> locations = new ArrayList<LatLon>(2);
+        locations.add(this.getLocations()[0]);
+        locations.add(this.getLocations()[1]);
+
+        List<LatLon> newLocations = LatLon.computeShiftedLocations(globe, oldRef, newRef, locations);
+        this.setLocations(newLocations.get(0), newLocations.get(1));
+
+        super.doMoveTo(oldRef, newRef);
     }
 
     protected void doMoveTo(Position oldRef, Position newRef)

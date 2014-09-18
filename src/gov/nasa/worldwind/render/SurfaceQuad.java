@@ -154,6 +154,21 @@ public class SurfaceQuad extends AbstractSurfaceShape implements Exportable
     }
 
     /**
+     * Creates a shallow copy of the specified source shape.
+     *
+     * @param source the shape to copy.
+     */
+    public SurfaceQuad(SurfaceQuad source)
+    {
+        super(source);
+
+        this.center = source.center;
+        this.width = source.width;
+        this.height = source.height;
+        this.heading = source.heading;
+    }
+
+    /**
      * Constructs a new surface quad with the specified normal (as opposed to highlight) attributes, the specified
      * center location and dimensions (in meters). Modifying the attribute reference after calling this constructor
      * causes this shape's appearance to change accordingly.
@@ -298,6 +313,15 @@ public class SurfaceQuad extends AbstractSurfaceShape implements Exportable
         Angle heading = LatLon.greatCircleAzimuth(oldReferencePosition, this.center);
         Angle pathLength = LatLon.greatCircleDistance(oldReferencePosition, this.center);
         this.setCenter(LatLon.greatCircleEndPosition(newReferencePosition, heading, pathLength));
+    }
+
+    protected void doMoveTo(Globe globe, Position oldReferencePosition, Position newReferencePosition)
+    {
+        List<LatLon> locations = new ArrayList<LatLon>(1);
+        locations.add(this.getCenter());
+        List<LatLon> newLocations = LatLon.computeShiftedLocations(globe, oldReferencePosition, newReferencePosition,
+            locations);
+        this.setCenter(newLocations.get(0));
     }
 
     public Iterable<? extends LatLon> getLocations(Globe globe)

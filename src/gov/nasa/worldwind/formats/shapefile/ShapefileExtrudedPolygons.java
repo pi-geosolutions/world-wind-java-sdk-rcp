@@ -41,11 +41,6 @@ public class ShapefileExtrudedPolygons extends ShapefileRenderable implements Or
             super(shapefileRenderable, shapefileRecord);
 
             this.height = ShapefileUtils.extractHeightAttribute(shapefileRecord); // may be null
-
-            if (shapefileRecord instanceof ShapefileRecordPolygon)
-            {
-                this.sector = Sector.fromDegrees(((ShapefileRecordPolygon) shapefileRecord).getBoundingRectangle());
-            }
         }
 
         public Double getHeight()
@@ -272,7 +267,8 @@ public class ShapefileExtrudedPolygons extends ShapefileRenderable implements Or
     protected boolean mustAssembleRecord(ShapefileRecord shapefileRecord)
     {
         return super.mustAssembleRecord(shapefileRecord)
-            && Shapefile.isPolygonType(shapefileRecord.getShapeType());
+            && (shapefileRecord.isPolylineRecord()
+            || shapefileRecord.isPolygonRecord()); // accept both polyline and polygon records
     }
 
     @Override
@@ -596,7 +592,7 @@ public class ShapefileExtrudedPolygons extends ShapefileRenderable implements Or
             vertices = Buffers.newDirectFloatBuffer(2 * vertexStride * numPoints);
         }
 
-        double[] coord = new double[2];
+        double[] location = new double[2];
         float[] vertex = new float[6];
         Vec4 rp = null;
 
@@ -616,21 +612,21 @@ public class ShapefileExtrudedPolygons extends ShapefileRenderable implements Or
             this.tess.setPolygonNormal(0, 0, 1); // tessellate in geographic coordinates
             this.tess.beginPolygon();
 
-            for (int part = record.firstPartNumber; part <= record.lastPartNumber; part++)
+            for (int i = 0; i < record.getBoundaryCount(); i++)
             {
                 this.tess.beginContour();
 
-                VecBuffer subBuffer = record.pointBuffer.subBuffer(part);
-                for (int i = 0; i < subBuffer.getSize(); i++)
+                VecBuffer points = record.getBoundaryPoints(i);
+                for (int j = 0; j < points.getSize(); j++)
                 {
-                    subBuffer.get(i, coord);
-                    Vec4 p = terrain.getSurfacePoint(Angle.fromDegrees(coord[1]), Angle.fromDegrees(coord[0]), 0);
+                    points.get(j, location);
+                    Vec4 p = terrain.getSurfacePoint(Angle.fromDegrees(location[1]), Angle.fromDegrees(location[0]), 0);
 
                     // Tessellate indices in geographic coordinates. This produces an index tessellation that is
                     // independent of the record's model coordinates, since the count and organization of top and bottom
                     // of vertices is always the same.
                     int index = vertices.position() / vertexStride; // index of top vertex
-                    this.tess.addVertex(coord[0], coord[1], 0, index); // map lon,lat to x,y
+                    this.tess.addVertex(location[0], location[1], 0, index); // map lon,lat to x,y
 
                     if (rp == null) // first vertex in the tile
                     {
@@ -730,12 +726,12 @@ public class ShapefileExtrudedPolygons extends ShapefileRenderable implements Or
     {
         tile.attributeGroups.clear();
 
-        // Assemble the tile's records into groups with common attributes. Attributes are compared using the instance's
-        // address, so subsequent changes to an Attribute instance will be reflected in the record group automatically.
-        // We take care to avoid assembling groups based on any Attribute property, as those properties may change
-        // without re-assembling these groups. However, changes to a record's visibility state, highlight state, normal
-        // attributes reference and highlight attributes reference invalidate this grouping.
-        HashMap<ShapeAttributes, RecordGroup> attrMap = new HashMap<ShapeAttributes, RecordGroup>();
+        // Assemble the tile's records into groups with common attributes. Attributes are grouped by reference using an
+        // InstanceHashMap, so that subsequent changes to an Attribute instance will be reflected in the record group
+        // automatically. We take care to avoid assembling groups based on any Attribute property, as those properties
+        // may change without re-assembling these groups. However, changes to a record's visibility state, highlight
+        // state, normal attributes reference and highlight attributes reference invalidate this grouping.
+        Map<ShapeAttributes, RecordGroup> attrMap = new IdentityHashMap<ShapeAttributes, RecordGroup>();
         for (Record record : tile.records)
         {
             if (!record.isVisible()) // ignore records marked as not visible

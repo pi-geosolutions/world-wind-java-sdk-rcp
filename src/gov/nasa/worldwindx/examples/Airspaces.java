@@ -6,10 +6,8 @@
 package gov.nasa.worldwindx.examples;
 
 import gov.nasa.worldwind.avlist.AVKey;
-import gov.nasa.worldwind.event.*;
 import gov.nasa.worldwind.geom.*;
 import gov.nasa.worldwind.layers.*;
-import gov.nasa.worldwind.render.Material;
 import gov.nasa.worldwind.render.airspaces.*;
 import gov.nasa.worldwind.render.airspaces.Box;
 import gov.nasa.worldwind.util.BasicDragger;
@@ -57,7 +55,7 @@ public class Airspaces extends ApplicationTemplate
 
         public Layer makeAGLAirspaces()
         {
-            AirspaceAttributes attrs = this.randomAttrs.nextAirspaceAttributes();
+            AirspaceAttributes attrs = this.randomAttrs.nextAttributes().asAirspaceAttributes();
             RenderableLayer layer = new RenderableLayer();
             layer.setName("AGL Airspaces");
 
@@ -220,7 +218,7 @@ public class Airspaces extends ApplicationTemplate
 
         protected Layer makeAMSLAirspaces()
         {
-            AirspaceAttributes attrs = randomAttrs.nextAirspaceAttributes();
+            AirspaceAttributes attrs = randomAttrs.nextAttributes().asAirspaceAttributes();
             RenderableLayer layer = new RenderableLayer();
             layer.setName("AMSL Airspaces");
 
@@ -335,7 +333,7 @@ public class Airspaces extends ApplicationTemplate
 
         public Layer makeIntersectingAirspaces()
         {
-            AirspaceAttributes attrs = randomAttrs.nextAirspaceAttributes();
+            AirspaceAttributes attrs = randomAttrs.nextAttributes().asAirspaceAttributes();
             RenderableLayer layer = new RenderableLayer();
             layer.setName("Intersecting Airspaces");
 
@@ -377,8 +375,8 @@ public class Airspaces extends ApplicationTemplate
 
         public Layer makeDatelineCrossingAirspaces()
         {
-            randomAttrs.nextAirspaceAttributes(); // skip the yellow attribute
-            AirspaceAttributes attrs = randomAttrs.nextAirspaceAttributes();
+            randomAttrs.nextAttributes(); // skip the yellow attribute
+            AirspaceAttributes attrs = randomAttrs.nextAttributes().asAirspaceAttributes();
             RenderableLayer layer = new RenderableLayer();
             layer.setName("Dateline Crossing Airspaces");
 
@@ -413,40 +411,6 @@ public class Airspaces extends ApplicationTemplate
         public void initializeSelectionMonitoring()
         {
             this.getWwd().addSelectListener(new BasicDragger(this.getWwd()));
-            this.getWwd().addSelectListener(new SelectListener()
-            {
-                public void selected(SelectEvent event)
-                {
-                    if (event.getEventAction().equals(SelectEvent.ROLLOVER))
-                    {
-                        highlight(event.getTopObject()); // Have rollover events highlight the rolled-over object.
-                    }
-                }
-            });
-        }
-
-        protected void highlight(Object o)
-        {
-            if (this.lastHighlightAirspace == o)
-                return; // Same thing selected
-
-            // Turn off highlight if on.
-            if (this.lastHighlightAirspace != null)
-            {
-                this.lastHighlightAirspace.setAttributes(this.lastAttrs);
-                this.lastHighlightAirspace = null;
-                this.lastAttrs = null;
-            }
-
-            // Turn on highlight if selected object is a SurfaceImage.
-            if (o instanceof Airspace)
-            {
-                this.lastHighlightAirspace = (Airspace) o;
-                this.lastAttrs = this.lastHighlightAirspace.getAttributes();
-                BasicAirspaceAttributes highlitAttrs = new BasicAirspaceAttributes(this.lastAttrs);
-                highlitAttrs.setInteriorMaterial(Material.WHITE);
-                this.lastHighlightAirspace.setAttributes(highlitAttrs);
-            }
         }
     }
 
