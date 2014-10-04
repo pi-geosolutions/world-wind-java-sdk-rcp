@@ -18,13 +18,25 @@ import gov.nasa.worldwind.render.airspaces.*;
 import gov.nasa.worldwind.render.airspaces.Box;
 import gov.nasa.worldwind.render.airspaces.Polygon;
 import gov.nasa.worldwind.render.markers.*;
-import gov.nasa.worldwind.terrain.SectorGeometryList;
 
 import java.awt.*;
+import java.awt.event.*;
 import java.util.*;
 import java.util.List;
 
 /**
+ * Provides a user interface for editing a shape and performs editing. Depending on the shape type, the shape is shown
+ * with control points for vertex locations and size. All shapes are shown with a handle that provides rotation.
+ * <p/>
+ * Left-drag on the shape's body moves the whole shape. Left-drag on a control point performs the action associated with
+ * that control point. The editor provides vertex insertion and removal for airspace Polygon, Curtain, Route and Track
+ * shapes, and SurfacePolygon and SurfacePolyline. Shift-left-click when the cursor is over the shape inserts a control
+ * point at the cursor's position. Alt-left-click when the cursor is over a control point removes that control point.
+ * Control points are added to the ends of airspace Polygon, Curtain, Route and Track, and SurfacePolyline by
+ * shift-left-click on the first or last control point of the shape.
+ * <p/>
+ * This editor supports airspaces other than Cake and all surface shapes except SurfaceImage.
+ *
  * @author tag
  * @version $Id$
  */
@@ -40,10 +52,16 @@ public class ShapeEditor implements SelectListener
      */
     protected String LOCATION = "gov.nasa.worldwind.shapeEditor.Location";
     /**
-     * Indicates that a control point is associates with whole-shape rotation.
+     * Indicates that a control point is associated with whole-shape rotation.
      */
     protected String ROTATION = "gov.nasa.worldwind.shapeEditor.Rotation";
+    /**
+     * Indicates that a control point is associated with width change.
+     */
     protected String WIDTH = "gov.nasa.worldwind.shapeEditor.Width";
+    /**
+     * Indicates that a control point is associated with height change.
+     */
     protected String HEIGHT = "gov.nasa.worldwind.shapeEditor.Height";
     /**
      * Indicates that a control point is associated with the left width of a shape.
@@ -70,14 +88,17 @@ public class ShapeEditor implements SelectListener
      */
     protected String RIGHT_AZIMUTH = "gov.nasa.worldwind.shapeEditor.RightAzimuth";
 
+    /**
+     * Represents editor control points.
+     */
     protected static class ControlPointMarker extends BasicMarker
     {
         /**
-         * The control point's ID.
+         * The control point's ID, which is typically its list index when the shape has a list of locations.
          */
         protected int id;
         /**
-         * Identifies individual track boxes and cake layers.
+         * Identifies individual track boxes.
          */
         protected int leg;
         /**
@@ -122,9 +143,19 @@ public class ShapeEditor implements SelectListener
             return this.purpose;
         }
 
+        public void setSize(double size)
+        {
+            this.size = size;
+        }
+
         public Double getSize()
         {
             return size;
+        }
+
+        public void setRotation(Angle rotation)
+        {
+            this.rotation = rotation;
         }
 
         public Angle getRotation()
@@ -199,8 +230,22 @@ public class ShapeEditor implements SelectListener
      * The control point associated with the current sizing operation.
      */
     protected ControlPointMarker currentSizingMarker;
+    /**
+     * The attributes associated with the shape when the editor is constructed. These are swapped out during editing
+     * operations in order to make the shape semi-transparent.
+     */
     protected ShapeAttributes originalAttributes;
+    /**
+     * The highlight attributes associated with the shape when the editor is constructed. These are swapped out during
+     * editing operations in order to make the shape semi-transparent.
+     */
     protected ShapeAttributes originalHighlightAttributes;
+
+    /**
+     * The event most recently recieved by the selection method.
+     */
+    protected SelectEvent currentEvent;
+
     /**
      * For shapes without an inherent heading, the current heading established by the editor for the shape.
      */
@@ -210,12 +255,21 @@ public class ShapeEditor implements SelectListener
      */
     protected List<Box> trackAdjacencyList;
 
-    protected MarkerAttributes locationMarkerAttributes;
-    protected MarkerAttributes sizeMarkerAttributes;
-    protected MarkerAttributes angleMarkerAttributes;
+    /**
+     * Attributes used to represent shape vertices.
+     */
+    protected MarkerAttributes locationControlPointAttributes;
+    /**
+     * Attributes used to represent shape size.
+     */
+    protected MarkerAttributes sizeControlPointAttributes;
+    /**
+     * Attributes used to represent shape rotation and other angular features.
+     */
+    protected MarkerAttributes angleControlPointAttributes;
 
     /**
-     * Constructs and editor for a specified shape. Once constructed, the editor must be armed to operate. See {@link
+     * Constructs an editor for a specified shape. Once constructed, the editor must be armed to operate. See {@link
      * #setArmed(boolean)}.
      *
      * @param wwd           the {@link gov.nasa.worldwind.WorldWindow} associated with the specified shape.
@@ -246,14 +300,29 @@ public class ShapeEditor implements SelectListener
             throw new IllegalArgumentException(msg);
         }
 
+        if (!(originalShape instanceof Attributable))
+        {
+            String msg = Logging.getMessage("generic.AttributableNotSupported");
+            Logging.logger().log(java.util.logging.Level.SEVERE, msg);
+            throw new IllegalArgumentException(msg);
+        }
+
         this.wwd = wwd;
         this.shape = originalShape;
-        this.originalAttributes = this.getShapeAttributes();
+        this.originalAttributes = ((Attributable) this.getShape()).getAttributes();
 
+        // Create a layer to hold the control points.
         this.controlPointLayer = new MarkerLayer();
         this.controlPointLayer.setKeepSeparated(false);
-        this.controlPointLayer.setValue(AVKey.IGNORE, true);
+        this.controlPointLayer.setValue(AVKey.IGNORE, true); // means "Don't show this layer in the layer manager."
+        if (this.shape instanceof SurfaceShape)
+        {
+            // This ensures that control points are always placed on the terrain for surface shapes.
+            this.controlPointLayer.setOverrideMarkerElevation(true);
+            this.controlPointLayer.setElevation(0);
+        }
 
+        // Create a layer to hold the rotation line and any other affordances.
         this.accessoryLayer = new RenderableLayer();
         this.accessoryLayer.setPickEnabled(false);
         this.accessoryLayer.setValue(AVKey.IGNORE, true);
@@ -272,23 +341,37 @@ public class ShapeEditor implements SelectListener
         rotationLine.setAttributes(lineAttrs);
         this.accessoryLayer.addRenderable(rotationLine);
 
+        // Create a layer to hold the editing annotations.
         this.annotationLayer = new RenderableLayer();
         this.annotationLayer.setPickEnabled(false);
         this.annotationLayer.setValue(AVKey.IGNORE, true);
 
+        // Create the annotation.
         this.annotation = new EditorAnnotation("");
         this.annotationLayer.addRenderable(this.annotation);
 
+        // Create a layer to hold the shadow shape, the shape that shows the state before an editing operation.
         this.shadowLayer = new RenderableLayer();
         this.shadowLayer.setPickEnabled(false);
         this.shadowLayer.setValue(AVKey.IGNORE, true);
 
+        // Create a units formatter for the annotations.
         this.unitsFormat = new UnitsFormat();
         this.unitsFormat.setFormat(UnitsFormat.FORMAT_LENGTH, " %,12.3f %s");
 
-        this.locationMarkerAttributes = new BasicMarkerAttributes(Material.BLUE, BasicMarkerShape.SPHERE, 0.7, 10, 0);
-        this.sizeMarkerAttributes = new BasicMarkerAttributes(Material.CYAN, BasicMarkerShape.SPHERE, 0.7, 10, 0);
-        this.angleMarkerAttributes = new BasicMarkerAttributes(Material.GREEN, BasicMarkerShape.SPHERE, 0.7, 10, 0);
+        // Create the attributes assigned to the control points.
+        this.makeControlPointAttributes();
+    }
+
+    protected void makeControlPointAttributes()
+    {
+        // Each attribute has color, marker type, opacity, size in pixels, and minimum size in meters (0 indicates that
+        // the minimum size is not considered.
+        this.locationControlPointAttributes = new BasicMarkerAttributes(Material.BLUE, BasicMarkerShape.SPHERE, 0.7, 10,
+            0);
+        this.sizeControlPointAttributes = new BasicMarkerAttributes(Material.CYAN, BasicMarkerShape.SPHERE, 0.7, 10, 0);
+        this.angleControlPointAttributes = new BasicMarkerAttributes(Material.GREEN, BasicMarkerShape.SPHERE, 0.7, 10,
+            0);
     }
 
     /**
@@ -332,6 +415,167 @@ public class ShapeEditor implements SelectListener
     }
 
     /**
+     * Indicates the control point layer used by this editor.
+     *
+     * @return the control point layer used by this editor.
+     */
+    public MarkerLayer getControlPointLayer()
+    {
+        return controlPointLayer;
+    }
+
+    /**
+     * Indicates the accessory layer used by this editor.
+     *
+     * @return the accessory layer used by this editor.
+     */
+    public RenderableLayer getAccessoryLayer()
+    {
+        return accessoryLayer;
+    }
+
+    /**
+     * Indicates the annotation layer used by this editor.
+     *
+     * @return the annotation layer used by this editor.
+     */
+    public RenderableLayer getAnnotationLayer()
+    {
+        return annotationLayer;
+    }
+
+    /**
+     * Indicates the shadow layer used by this editor.
+     *
+     * @return the shadow layer used by this editor.
+     */
+    public RenderableLayer getShadowLayer()
+    {
+        return shadowLayer;
+    }
+
+    /**
+     * Indicates the annotation used to show locations and  measurements.
+     *
+     * @return the annotation used to show shape locations and measurements.
+     */
+    public EditorAnnotation getAnnotation()
+    {
+        return annotation;
+    }
+
+    /**
+     * Indicates whether an editing operation is currently underway. Operations are SIZING and MOVING.
+     *
+     * @return true if an operation is underway, otherwise false.
+     */
+    public boolean isActive()
+    {
+        return active;
+    }
+
+    /**
+     * Indicates the current operation being performed, either SIZING, MOVING or NONE.
+     *
+     * @return the current operation underway.
+     */
+    public int getActiveOperation()
+    {
+        return activeOperation;
+    }
+
+    /**
+     * Returns the geographic position associated with the previous select event.
+     *
+     * @return the geographic position associated with the previous select event.
+     */
+    public Position getPreviousPosition()
+    {
+        return previousPosition;
+    }
+
+    /**
+     * Indicates the control point currently used in the operation underway.
+     *
+     * @return the control point used in the operation currently underway.
+     */
+    public ControlPointMarker getCurrentSizingMarker()
+    {
+        return currentSizingMarker;
+    }
+
+    /**
+     * Indicates the attributes associated with the shape when the editor was created.
+     *
+     * @return the attributes associated with the shape when the editor was created.
+     */
+    public ShapeAttributes getOriginalAttributes()
+    {
+        return originalAttributes;
+    }
+
+    /**
+     * Indicates the highlight attributes associated with the shape prior to their being changed to achieve shape
+     * transparency.
+     *
+     * @return the original highlight attributes.
+     */
+    public ShapeAttributes getOriginalHighlightAttributes()
+    {
+        return originalHighlightAttributes;
+    }
+
+    /**
+     * Indicates the current rotation heading. This is updated as shapes are rotated.
+     *
+     * @return the current rotation heading.
+     */
+    public Angle getCurrentHeading()
+    {
+        return currentHeading;
+    }
+
+    /**
+     * Indicates the attributes associated with location control points.
+     *
+     * @return the attributes associated with location control points.
+     */
+    public MarkerAttributes getLocationControlPointAttributes()
+    {
+        return locationControlPointAttributes;
+    }
+
+    /**
+     * Indicates the attributes associated with size control points.
+     *
+     * @return the attributes associated with size control points.
+     */
+    public MarkerAttributes getSizeControlPointAttributes()
+    {
+        return sizeControlPointAttributes;
+    }
+
+    /**
+     * Indicates the attributes associated with angle control points.
+     *
+     * @return the attributes associated with angle control points.
+     */
+    public MarkerAttributes getAngleControlPointAttributes()
+    {
+        return angleControlPointAttributes;
+    }
+
+    /**
+     * Indicates the event most recently passed to the select handler.
+     *
+     * @return the event most recently passed to the select handler.
+     */
+    public SelectEvent getCurrentEvent()
+    {
+        return currentEvent;
+    }
+
+    /**
      * Indicates whether this editor is armed.
      *
      * @return <code>true</code> if the editor is armed, otherwise <code>false</code>.
@@ -351,11 +595,11 @@ public class ShapeEditor implements SelectListener
      */
     public void setArmed(boolean armed)
     {
-        if (!this.armed && armed)
+        if (!this.isArmed() && armed)
         {
             this.enable();
         }
-        else if (this.armed && !armed)
+        else if (this.isArmed() && !armed)
         {
             this.disable();
         }
@@ -364,56 +608,54 @@ public class ShapeEditor implements SelectListener
     }
 
     /**
-     * Called by {@link #setArmed(boolean)} to create affordance resources, including the layers in which the
-     * affordances are displayed.
+     * Called by {@link #setArmed(boolean)} to initialize this editor.
      */
     protected void enable()
     {
-        LayerList layers = this.wwd.getModel().getLayers();
+        LayerList layers = this.getWwd().getModel().getLayers();
 
-        if (!layers.contains(this.controlPointLayer))
-            layers.add(this.controlPointLayer);
+        if (!layers.contains(this.getControlPointLayer()))
+            layers.add(this.getControlPointLayer());
 
-        if (!this.controlPointLayer.isEnabled())
-            this.controlPointLayer.setEnabled(true);
+        if (!this.getControlPointLayer().isEnabled())
+            this.getControlPointLayer().setEnabled(true);
 
-        if (!layers.contains(this.accessoryLayer))
-            layers.add(this.accessoryLayer);
+        if (!layers.contains(this.getAccessoryLayer()))
+            layers.add(this.getAccessoryLayer());
 
-        if (!this.accessoryLayer.isEnabled())
-            this.accessoryLayer.setEnabled(true);
+        if (!this.getAccessoryLayer().isEnabled())
+            this.getAccessoryLayer().setEnabled(true);
 
-        if (!layers.contains(this.annotationLayer))
-            layers.add(this.annotationLayer);
+        if (!layers.contains(this.getAnnotationLayer()))
+            layers.add(this.getAnnotationLayer());
 
-        if (!layers.contains(this.shadowLayer))
-            layers.add(0, this.shadowLayer);
-        this.shadowLayer.setEnabled(true);
+        if (!layers.contains(this.getShadowLayer()))
+            layers.add(0, this.getShadowLayer());
+        this.getShadowLayer().setEnabled(true);
 
-        if (this.shape instanceof TrackAirspace)
+        if (this.getShape() instanceof TrackAirspace)
             this.determineTrackAdjacency();
 
         this.updateControlPoints();
 
-        this.wwd.addSelectListener(this);
+        this.getWwd().addSelectListener(this);
     }
 
     /**
-     * Called by {@link #setArmed(boolean)} to destroy affordance resources, including the layers in which the
-     * affordances are displayed.
+     * Called by {@link #setArmed(boolean)} to remove resources no longer needed after editing.
      */
     protected void disable()
     {
-        LayerList layers = this.wwd.getModel().getLayers();
+        LayerList layers = this.getWwd().getModel().getLayers();
 
-        layers.remove(this.controlPointLayer);
-        layers.remove(this.accessoryLayer);
-        layers.remove(this.annotationLayer);
-        layers.remove(this.shadowLayer);
+        layers.remove(this.getControlPointLayer());
+        layers.remove(this.getAccessoryLayer());
+        layers.remove(this.getAnnotationLayer());
+        layers.remove(this.getShadowLayer());
 
-        wwd.removeSelectListener(this);
+        getWwd().removeSelectListener(this);
 
-        ((Component) this.wwd).setCursor(null);
+        ((Component) this.getWwd()).setCursor(null);
     }
 
     /**
@@ -426,16 +668,22 @@ public class ShapeEditor implements SelectListener
         else
             this.trackAdjacencyList.clear();
 
-        TrackAirspace track = (TrackAirspace) this.shape;
+        TrackAirspace track = (TrackAirspace) this.getShape();
         List<Box> legs = track.getLegs();
         for (int i = 1; i < legs.size(); i++)
         {
-            boolean adjacent = track.mustJoinLegs(legs.get(i - 1), legs.get(i));
+            boolean adjacent = legs.get(i - 1).getLocations()[1].equals(legs.get(i).getLocations()[0]);
             if (adjacent)
                 this.trackAdjacencyList.add(legs.get(i));
         }
     }
 
+    /**
+     * The select handler, the method called when the user selects (rolls over, left clicks, etc.) the shape or a
+     * control point. Does not necessarily indicate the shape associated with this editor.
+     *
+     * @param event the select event indicating what was selected and the geographic location under the cursor.
+     */
     public void selected(SelectEvent event)
     {
         if (event == null)
@@ -445,39 +693,41 @@ public class ShapeEditor implements SelectListener
             throw new IllegalArgumentException(msg);
         }
 
+        this.currentEvent = event;
+
         if (event.getEventAction().equals(SelectEvent.DRAG_END))
         {
             this.active = false;
             this.activeOperation = NONE;
             this.previousPosition = null;
-            ((Component) this.wwd).setCursor(null);
+            ((Component) this.getWwd()).setCursor(null);
             this.removeShadowShape();
             this.updateAnnotation(null);
         }
         else if (event.getEventAction().equals(SelectEvent.ROLLOVER))
         {
-            if (!(this.wwd instanceof Component))
+            if (!(this.getWwd() instanceof Component))
                 return;
 
             // Update the cursor.
             Cursor cursor = null;
             if (this.activeOperation == MOVING)
                 cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR);
-            else if (this.activeOperation == SIZING)
+            else if (this.getActiveOperation() == SIZING)
                 cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR);
-            else if (event.getTopObject() != null && event.getTopObject() == this.shape)
+            else if (event.getTopObject() != null && event.getTopObject() == this.getShape())
                 cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR);
             else if (event.getTopObject() != null && event.getTopObject() instanceof Marker)
                 cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR);
 
-            ((Component) this.wwd).setCursor(cursor);
+            ((Component) this.getWwd()).setCursor(cursor);
 
             // Update the shape or control point annotation.
-            if (this.activeOperation == MOVING && event.getTopObject() == this.shape)
+            if (this.getActiveOperation() == MOVING && event.getTopObject() == this.getShape())
                 this.updateShapeAnnotation();
-            else if (this.activeOperation == SIZING)
-                this.updateAnnotation(this.currentSizingMarker);
-            else if (event.getTopObject() != null && event.getTopObject() == this.shape)
+            else if (this.getActiveOperation() == SIZING)
+                this.updateAnnotation(this.getCurrentSizingMarker());
+            else if (event.getTopObject() != null && event.getTopObject() == this.getShape())
                 this.updateShapeAnnotation();
             else if (event.getTopObject() != null && event.getTopObject() instanceof ControlPointMarker)
                 this.updateAnnotation((ControlPointMarker) event.getTopObject());
@@ -486,6 +736,7 @@ public class ShapeEditor implements SelectListener
         }
         else if (event.getEventAction().equals(SelectEvent.LEFT_PRESS))
         {
+            // Prepare for a drag.
             this.active = true;
             PickedObjectList objectsUnderCursor = this.getWwd().getObjectsAtCurrentPosition();
             if (objectsUnderCursor != null)
@@ -495,9 +746,31 @@ public class ShapeEditor implements SelectListener
                     this.previousPosition = terrainObject.getPosition();
             }
         }
+        else if (event.getEventAction().equals(SelectEvent.LEFT_CLICK))
+        {
+            Object topObject = event.getTopObject();
+            if (topObject == null)
+                return;
+
+            // Add and delete control points.
+            if (event.getTopPickedObject().getParentLayer() == this.getControlPointLayer())
+            {
+                this.reshapeShape((ControlPointMarker) topObject);
+                this.updateControlPoints();
+                this.updateAnnotation(this.getCurrentSizingMarker());
+                event.consume();
+            }
+            else if ((event.getTopObject() == this.getShape()) &&
+                (this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) != 0)
+            {
+                this.reshapeShape(null);
+                this.updateControlPoints();
+                event.consume();
+            }
+        }
         else if (event.getEventAction().equals(SelectEvent.DRAG))
         {
-            if (!this.active)
+            if (!this.isActive())
                 return;
 
             DragSelectEvent dragEvent = (DragSelectEvent) event;
@@ -505,28 +778,30 @@ public class ShapeEditor implements SelectListener
             if (topObject == null)
                 return;
 
-            if (this.activeOperation == NONE) // drag is starting
+            if (this.getActiveOperation() == NONE) // drag is starting
                 this.makeShadowShape();
 
-            if (topObject == this.shape || this.activeOperation == MOVING)
+            if (topObject == this.getShape() || this.getActiveOperation() == MOVING)
             {
+                // Move the whole shape.
                 this.activeOperation = MOVING;
                 this.dragWholeShape(dragEvent);
                 this.updateControlPoints();
                 this.updateShapeAnnotation();
                 event.consume();
             }
-            else if (dragEvent.getTopPickedObject().getParentLayer() == this.controlPointLayer
-                || this.activeOperation == SIZING)
+            else if (dragEvent.getTopPickedObject().getParentLayer() == this.getControlPointLayer()
+                || this.getActiveOperation() == SIZING)
             {
+                // Perform the editing operation associated with the selected control point.
                 this.activeOperation = SIZING;
                 this.reshapeShape((ControlPointMarker) topObject);
                 this.updateControlPoints();
-                this.updateAnnotation(this.currentSizingMarker);
+                this.updateAnnotation(this.getCurrentSizingMarker());
                 event.consume();
             }
 
-            this.wwd.redraw();
+            this.getWwd().redraw(); // update the display
         }
     }
 
@@ -542,17 +817,29 @@ public class ShapeEditor implements SelectListener
         // Reduce the opacity of an opaque current shape so that the shadow shape is visible while editing
         // is performed.
 
-        this.originalAttributes = this.getShapeAttributes();
-        this.originalHighlightAttributes = this.getShapeHighlightAttributes();
+        this.originalAttributes = ((Attributable) this.getShape()).getAttributes();
+        this.originalHighlightAttributes = ((Attributable) this.getShape()).getHighlightAttributes();
 
         ShapeAttributes editingAttributes = new BasicShapeAttributes(this.originalAttributes);
         if (editingAttributes.getInteriorOpacity() == 1)
             editingAttributes.setInteriorOpacity(0.7);
 
-        this.setShapeAttributes(editingAttributes);
-        this.setShapeHighlightAttributes(editingAttributes);
+        ((Attributable) this.getShape()).setAttributes(editingAttributes);
+        ((Attributable) this.getShape()).setHighlightAttributes(editingAttributes);
 
-        this.shadowLayer.addRenderable(shadowShape);
+        this.getShadowLayer().addRenderable(shadowShape);
+
+        if (this.getShape() instanceof Airspace)
+        {
+            double[] altitudes = ((Airspace) shadowShape).getAltitudes();
+            ((Airspace) shadowShape).setAltitudes(altitudes[0], 0.95 * altitudes[1]);
+//
+//            // Show only the outline of the shadow shape.
+//            AirspaceAttributes shadowAttributes = new BasicAirspaceAttributes(this.originalAttributes);
+//            shadowAttributes.setDrawInterior(false);
+//            ((Airspace)shadowShape).setAttributes(shadowAttributes);
+//            ((Airspace)shadowShape).setHighlightAttributes(shadowAttributes);
+        }
     }
 
     /**
@@ -560,16 +847,16 @@ public class ShapeEditor implements SelectListener
      */
     protected void removeShadowShape()
     {
-        this.shadowLayer.removeAllRenderables();
+        this.getShadowLayer().removeAllRenderables();
 
         // Restore the original attributes.
-        if (this.originalAttributes != null)
+        if (this.getOriginalAttributes() != null)
         {
-            this.setShapeAttributes(this.originalAttributes);
-            this.setShapeHighlightAttributes(this.originalHighlightAttributes);
+            ((Attributable) this.getShape()).setAttributes(this.getOriginalAttributes());
+            ((Attributable) this.getShape()).setHighlightAttributes(this.getOriginalHighlightAttributes());
         }
 
-        this.wwd.redraw();
+        this.getWwd().redraw();
     }
 
     /**
@@ -580,34 +867,34 @@ public class ShapeEditor implements SelectListener
      */
     protected Renderable doMakeShadowShape()
     {
-        if (this.shape instanceof Polygon)
-            return new Polygon((Polygon) this.shape);
-        else if (this.shape instanceof PartialCappedCylinder)
-            return new PartialCappedCylinder((PartialCappedCylinder) this.shape);
-        else if (this.shape instanceof CappedCylinder)
-            return new CappedCylinder((CappedCylinder) this.shape);
-        else if (this.shape instanceof Orbit)
-            return new Orbit((Orbit) this.shape);
-        else if (this.shape instanceof Route)
-            return new Route((Route) this.shape);
-        else if (this.shape instanceof Curtain)
-            return new Curtain((Curtain) this.shape);
-        else if (this.shape instanceof SphereAirspace)
-            return new SphereAirspace((SphereAirspace) this.shape);
-        else if (this.shape instanceof TrackAirspace)
-            return new TrackAirspace((TrackAirspace) this.shape);
-        else if (this.shape instanceof SurfaceSquare)
-            return new SurfaceSquare((SurfaceSquare) this.shape);
-        else if (this.shape instanceof SurfaceQuad)
-            return new SurfaceQuad((SurfaceQuad) this.shape);
-        else if (this.shape instanceof SurfaceCircle)
-            return new SurfaceCircle((SurfaceCircle) this.shape);
-        else if (this.shape instanceof SurfaceEllipse)
-            return new SurfaceEllipse((SurfaceEllipse) this.shape);
-        else if (this.shape instanceof SurfacePolyline)
-            return new SurfacePolyline((SurfacePolyline) this.shape);
-        else if (this.shape instanceof SurfacePolygon)
-            return new SurfacePolygon((SurfacePolygon) this.shape);
+        if (this.getShape() instanceof Polygon)
+            return new Polygon((Polygon) this.getShape());
+        else if (this.getShape() instanceof PartialCappedCylinder)
+            return new PartialCappedCylinder((PartialCappedCylinder) this.getShape());
+        else if (this.getShape() instanceof CappedCylinder)
+            return new CappedCylinder((CappedCylinder) this.getShape());
+        else if (this.getShape() instanceof Orbit)
+            return new Orbit((Orbit) this.getShape());
+        else if (this.getShape() instanceof Route)
+            return new Route((Route) this.getShape());
+        else if (this.getShape() instanceof Curtain)
+            return new Curtain((Curtain) this.getShape());
+        else if (this.getShape() instanceof SphereAirspace)
+            return new SphereAirspace((SphereAirspace) this.getShape());
+        else if (this.getShape() instanceof TrackAirspace)
+            return new TrackAirspace((TrackAirspace) this.getShape());
+        else if (this.getShape() instanceof SurfaceSquare)
+            return new SurfaceSquare((SurfaceSquare) this.getShape());
+        else if (this.getShape() instanceof SurfaceQuad)
+            return new SurfaceQuad((SurfaceQuad) this.getShape());
+        else if (this.getShape() instanceof SurfaceCircle)
+            return new SurfaceCircle((SurfaceCircle) this.getShape());
+        else if (this.getShape() instanceof SurfaceEllipse)
+            return new SurfaceEllipse((SurfaceEllipse) this.getShape());
+        else if (this.getShape() instanceof SurfacePolyline)
+            return new SurfacePolyline((SurfacePolyline) this.getShape());
+        else if (this.getShape() instanceof SurfacePolygon)
+            return new SurfacePolygon((SurfacePolygon) this.getShape());
 
         return null;
     }
@@ -622,7 +909,7 @@ public class ShapeEditor implements SelectListener
      */
     protected void adjustShape()
     {
-        if (this.shape instanceof TrackAirspace)
+        if (this.getShape() instanceof TrackAirspace)
             this.adjustTrackShape();
     }
 
@@ -632,7 +919,7 @@ public class ShapeEditor implements SelectListener
      */
     protected void adjustTrackShape()
     {
-        TrackAirspace track = (TrackAirspace) this.shape;
+        TrackAirspace track = (TrackAirspace) this.getShape();
 
         List<Box> legs = track.getLegs();
         if (legs == null)
@@ -657,10 +944,10 @@ public class ShapeEditor implements SelectListener
      */
     protected void dragWholeShape(DragSelectEvent dragEvent)
     {
-        Movable2 dragObject = (Movable2) this.shape;
+        Movable2 dragObject = (Movable2) this.getShape();
 
-        View view = wwd.getView();
-        Globe globe = wwd.getModel().getGlobe();
+        View view = getWwd().getView();
+        Globe globe = getWwd().getModel().getGlobe();
 
         // Compute ref-point position in screen coordinates.
         Position refPos = dragObject.getReferencePosition();
@@ -685,14 +972,14 @@ public class ShapeEditor implements SelectListener
             // Intersection with globe. Move reference point to the intersection point.
             Position p = globe.computePositionFromPoint(inters[0].getIntersectionPoint());
             dragObject.moveTo(getWwd().getModel().getGlobe(), new Position(p,
-                ((Movable2) this.shape).getReferencePosition().getAltitude()));
+                ((Movable2) this.getShape()).getReferencePosition().getAltitude()));
         }
 
         this.adjustShape();
     }
 
     /**
-     * Modifies the shape's location, size or rotation. This method is called when a control point is dragged.
+     * Modifies the shape's locations, size or rotation. This method is called when a control point is dragged.
      *
      * @param controlPoint the control point selected.
      */
@@ -701,22 +988,22 @@ public class ShapeEditor implements SelectListener
         this.currentSizingMarker = controlPoint;
 
         // If the terrain beneath the control point is null, then the user is attempting to drag the handle off the
-        // globe. This is not a valid state for SurfaceImage, so we will ignore this action but keep the drag operation
-        // in effect.
+        // globe. This is not a valid state, so we ignore this action but keep the drag operation in effect.
         PickedObjectList objectsUnderCursor = this.getWwd().getObjectsAtCurrentPosition();
         if (objectsUnderCursor == null)
             return;
 
-        PickedObject terrainObject = this.wwd.getObjectsAtCurrentPosition().getTerrainObject();
+        PickedObject terrainObject = this.getWwd().getObjectsAtCurrentPosition().getTerrainObject();
         if (terrainObject == null)
             return;
 
-        if (this.previousPosition == null)
+        if (this.getPreviousPosition() == null)
         {
             this.previousPosition = terrainObject.getPosition();
             return;
         }
 
+        // Perform the editing operation.
         this.doReshapeShape(controlPoint, terrainObject.getPosition());
 
         this.previousPosition = terrainObject.getPosition();
@@ -734,30 +1021,36 @@ public class ShapeEditor implements SelectListener
      */
     protected void doReshapeShape(ControlPointMarker controlPoint, Position terrainPosition)
     {
-        if (this.shape instanceof Polygon || this.shape instanceof Curtain)
-            this.reshapePolygonAirspace(terrainPosition, controlPoint);
-        else if (this.shape instanceof CappedCylinder)
-            this.reshapeCappedCylinder(terrainPosition, controlPoint);
-        else if (this.shape instanceof Orbit)
-            this.reshapeOrbit(terrainPosition, controlPoint);
-        else if (this.shape instanceof Route)
-            this.reshapeRoute(terrainPosition, controlPoint);
-        else if (this.shape instanceof SphereAirspace)
-            this.reshapeSphere(terrainPosition, controlPoint);
-        else if (this.shape instanceof TrackAirspace)
-            this.reshapeTrack(terrainPosition, controlPoint);
-        else if (this.shape instanceof SurfacePolygon)
-            this.reshapeSurfacePolygon(terrainPosition, controlPoint);
-        else if (this.shape instanceof SurfacePolyline)
-            this.reshapeSurfacePolygon(terrainPosition, controlPoint);
-        else if (this.shape instanceof SurfaceCircle)
-            this.reshapeSurfaceCircle(terrainPosition, controlPoint);
-        else if (this.shape instanceof SurfaceSquare)
-            this.reshapeSurfaceSquare(terrainPosition, controlPoint);
-        else if (this.shape instanceof SurfaceQuad)
-            this.reshapeSurfaceQuad(terrainPosition, controlPoint);
-        else if (this.shape instanceof SurfaceEllipse)
-            this.reshapeSurfaceEllipse(terrainPosition, controlPoint);
+        if (this.getShape() instanceof Airspace)
+        {
+            if (this.getShape() instanceof Polygon || this.getShape() instanceof Curtain)
+                this.reshapePolygonAirspace(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof CappedCylinder)
+                this.reshapeCappedCylinder(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof Orbit)
+                this.reshapeOrbit(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof Route)
+                this.reshapeRoute(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof SphereAirspace)
+                this.reshapeSphere(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof TrackAirspace)
+                this.reshapeTrack(terrainPosition, controlPoint);
+        }
+        else if (this.getShape() instanceof SurfaceShape)
+        {
+            if (this.getShape() instanceof SurfacePolygon)
+                this.reshapeSurfacePolygon(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof SurfacePolyline)
+                this.reshapeSurfacePolygon(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof SurfaceCircle)
+                this.reshapeSurfaceCircle(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof SurfaceSquare)
+                this.reshapeSurfaceSquare(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof SurfaceQuad)
+                this.reshapeSurfaceQuad(terrainPosition, controlPoint);
+            else if (this.getShape() instanceof SurfaceEllipse)
+                this.reshapeSurfaceEllipse(terrainPosition, controlPoint);
+        }
     }
 
     /**
@@ -766,129 +1059,36 @@ public class ShapeEditor implements SelectListener
      */
     protected void updateControlPoints()
     {
-        if (this.shape instanceof Polygon || this.shape instanceof Curtain)
-            this.updatePolygonAirspaceControlPoints();
-        else if (this.shape instanceof PartialCappedCylinder)
-            this.updatePartialCappedCylinderControlPoints();
-        else if (this.shape instanceof CappedCylinder)
-            this.updateCappedCylinderControlPoints();
-        else if (this.shape instanceof Orbit)
-            this.updateOrbitControlPoints();
-        else if (this.shape instanceof Route)
-            this.updateRouteControlPoints();
-        else if (this.shape instanceof SphereAirspace)
-            this.updateSphereControlPoints();
-        else if (this.shape instanceof TrackAirspace)
-            this.updateTrackControlPoints();
-        else if (this.shape instanceof SurfacePolygon || this.shape instanceof SurfacePolyline)
-            this.updateSurfacePolygonControlPoints();
-        else if (this.shape instanceof SurfaceCircle)
-            this.updateSurfaceCircleControlPoints();
-        else if (this.shape instanceof SurfaceSquare)
-            this.updateSurfaceSquareControlPoints();
-        else if (this.shape instanceof SurfaceQuad)
-            this.updateSurfaceQuadControlPoints();
-        else if (this.shape instanceof SurfaceEllipse)
-            this.updateSurfaceEllipseControlPoints();
-    }
-
-    public ShapeAttributes getShapeAttributes()
-    {
-        if (this.shape instanceof Airspace)
-            return ((Airspace) this.shape).getAttributes();
-        else if (this.shape instanceof SurfaceShape)
-            return ((SurfaceShape) this.shape).getAttributes();
-        else if (this.shape instanceof AbstractShape)
-            return ((AbstractShape) this.shape).getAttributes();
-        else
-            return null;
-    }
-
-    public ShapeAttributes getShapeHighlightAttributes()
-    {
-        if (this.shape instanceof Airspace)
-            return ((Airspace) this.shape).getHighlightAttributes();
-        else if (this.shape instanceof SurfaceShape)
-            return ((SurfaceShape) this.shape).getHighlightAttributes();
-        else if (this.shape instanceof AbstractShape)
-            return ((AbstractShape) this.shape).getHighlightAttributes();
-        else
-            return null;
-    }
-
-    public void setShapeAttributes(ShapeAttributes attributes)
-    {
-        if (this.shape instanceof Airspace)
-            ((Airspace) this.shape).setAttributes(new BasicAirspaceAttributes(attributes));
-        else if (this.shape instanceof SurfaceShape)
-            ((SurfaceShape) this.shape).setAttributes(attributes);
-        else if (this.shape instanceof AbstractShape)
-            ((AbstractShape) this.shape).setAttributes(attributes);
-    }
-
-    public void setShapeHighlightAttributes(ShapeAttributes attributes)
-    {
-        if (this.shape instanceof Airspace)
-            ((Airspace) this.shape).setHighlightAttributes(new BasicAirspaceAttributes(attributes));
-        else if (this.shape instanceof SurfaceShape)
-            ((SurfaceShape) this.shape).setHighlightAttributes(attributes);
-        else if (this.shape instanceof AbstractShape)
-            ((AbstractShape) this.shape).setHighlightAttributes(attributes);
-    }
-
-    protected Angle computeHeadingDelta(Vec4 centerPoint, Vec4 previousPoint, Vec4 terrainPoint, Vec4 delta)
-    {
-        Vec4 vP = previousPoint.subtract3(centerPoint);
-        Vec4 vT = terrainPoint.subtract3(centerPoint);
-        Vec4 cross = vT.cross3(vP);
-        double sign = cross.z >= 0 ? -1 : 1;
-
-        return Angle.fromRadians(sign * Math.atan2(delta.getLength3(), vP.getLength3()));
-    }
-
-    protected double computeSurfaceElevation(WorldWindow wwd, LatLon latLon)
-    {
-        SectorGeometryList sgl = wwd.getSceneController().getTerrain();
-        if (sgl != null)
+        if (this.getShape() instanceof Airspace)
         {
-            Vec4 point = sgl.getSurfacePoint(latLon.getLatitude(), latLon.getLongitude(), 0.0);
-            if (point != null)
-            {
-                Position pos = wwd.getModel().getGlobe().computePositionFromPoint(point);
-                return pos.getElevation();
-            }
+            if (this.getShape() instanceof Polygon || this.getShape() instanceof Curtain)
+                this.updatePolygonAirspaceControlPoints();
+            else if (this.getShape() instanceof PartialCappedCylinder)
+                this.updatePartialCappedCylinderControlPoints();
+            else if (this.getShape() instanceof CappedCylinder)
+                this.updateCappedCylinderControlPoints();
+            else if (this.getShape() instanceof Orbit)
+                this.updateOrbitControlPoints();
+            else if (this.getShape() instanceof Route)
+                this.updateRouteControlPoints();
+            else if (this.getShape() instanceof SphereAirspace)
+                this.updateSphereControlPoints();
+            else if (this.getShape() instanceof TrackAirspace)
+                this.updateTrackControlPoints();
         }
-
-        return wwd.getModel().getGlobe().getElevation(latLon.getLatitude(), latLon.getLongitude());
-    }
-
-    /**
-     * Computes the appropriate altitude at which to place a control point at a specified location.
-     *
-     * @param location the location of the control point.
-     *
-     * @return the appropriate altitude at which to place the control point.
-     */
-    protected double computeControlPointAltitude(LatLon location)
-    {
-        double altitude = 0;
-
-        if (this.shape instanceof Airspace)
+        else if (this.getShape() instanceof SurfaceShape)
         {
-            Airspace airspace = (Airspace) this.shape;
-
-            altitude = airspace.getAltitudes()[1];
-
-            if (airspace.getAltitudeDatum()[1].equals(AVKey.ABOVE_GROUND_LEVEL))
-            {
-                LatLon refPos = airspace.getGroundReference();
-                if (refPos == null)
-                    refPos = location;
-                altitude += getWwd().getModel().getGlobe().getElevation(refPos.getLatitude(), refPos.getLongitude());
-            }
+            if (this.getShape() instanceof SurfacePolygon || this.getShape() instanceof SurfacePolyline)
+                this.updateSurfacePolygonControlPoints();
+            else if (this.getShape() instanceof SurfaceCircle)
+                this.updateSurfaceCircleControlPoints();
+            else if (this.getShape() instanceof SurfaceSquare)
+                this.updateSurfaceSquareControlPoints();
+            else if (this.getShape() instanceof SurfaceQuad)
+                this.updateSurfaceQuadControlPoints();
+            else if (this.getShape() instanceof SurfaceEllipse)
+                this.updateSurfaceEllipseControlPoints();
         }
-
-        return altitude;
     }
 
     /**
@@ -901,8 +1101,8 @@ public class ShapeEditor implements SelectListener
 
         if (center != null)
         {
-            ControlPointMarker dummyMarker = new ControlPointMarker(new Position(center, 0),
-                new BasicMarkerAttributes(), 0, ANNOTATION);
+            ControlPointMarker dummyMarker = this.makeControlPoint(new Position(center, 0), new BasicMarkerAttributes(),
+                0, ANNOTATION);
             this.updateAnnotation(dummyMarker);
         }
         else
@@ -920,14 +1120,14 @@ public class ShapeEditor implements SelectListener
     {
         LatLon center = null;
 
-        if (this.shape instanceof CappedCylinder)
-            center = ((CappedCylinder) this.shape).getCenter();
-        else if (this.shape instanceof SphereAirspace)
-            center = ((SphereAirspace) this.shape).getLocation();
-        else if (this.shape instanceof SurfaceEllipse)
-            center = ((SurfaceEllipse) this.shape).getCenter();
-        else if (this.shape instanceof SurfaceQuad)
-            center = ((SurfaceQuad) this.shape).getCenter();
+        if (this.getShape() instanceof CappedCylinder)
+            center = ((CappedCylinder) this.getShape()).getCenter();
+        else if (this.getShape() instanceof SphereAirspace)
+            center = ((SphereAirspace) this.getShape()).getLocation();
+        else if (this.getShape() instanceof SurfaceEllipse)
+            center = ((SurfaceEllipse) this.getShape()).getCenter();
+        else if (this.getShape() instanceof SurfaceQuad)
+            center = ((SurfaceQuad) this.getShape()).getCenter();
 
         return center;
     }
@@ -941,12 +1141,12 @@ public class ShapeEditor implements SelectListener
     {
         if (controlPoint == null)
         {
-            this.annotationLayer.setEnabled(false);
+            this.getAnnotationLayer().setEnabled(false);
             return;
         }
 
-        this.annotationLayer.setEnabled(true);
-        this.annotation.setPosition(controlPoint.getPosition());
+        this.getAnnotationLayer().setEnabled(true);
+        this.getAnnotation().setPosition(controlPoint.getPosition());
 
         String annotationText;
         if (controlPoint.size != null)
@@ -956,7 +1156,7 @@ public class ShapeEditor implements SelectListener
         else
             annotationText = this.unitsFormat.latLon2(controlPoint.getPosition());
 
-        this.annotation.setText(annotationText);
+        this.getAnnotation().setText(annotationText);
     }
 
     /**
@@ -967,7 +1167,7 @@ public class ShapeEditor implements SelectListener
      */
     protected void updateOrientationLine(Position centerPosition, Position controlPoint)
     {
-        Path rotationLine = (Path) this.accessoryLayer.getRenderables().iterator().next();
+        Path rotationLine = (Path) this.getAccessoryLayer().getRenderables().iterator().next();
 
         double cAltitude = centerPosition.getAltitude();
         double rAltitude = controlPoint.getAltitude();
@@ -976,6 +1176,7 @@ public class ShapeEditor implements SelectListener
             rotationLine.setAltitudeMode(WorldWind.RELATIVE_TO_GROUND);
             rotationLine.setFollowTerrain(true);
 
+            // Add a little altitude so that the line isn't lost during depth buffering.
             cAltitude = 100 + centerPosition.getAltitude() - this.getWwd().getModel().getGlobe().getElevation(
                 centerPosition.getLatitude(), centerPosition.getLongitude());
             rAltitude = 100 + controlPoint.getAltitude() - this.getWwd().getModel().getGlobe().getElevation(
@@ -998,21 +1199,122 @@ public class ShapeEditor implements SelectListener
         rotationLine.setPositions(linePositions);
     }
 
+    /**
+     * Computes the appropriate absolute altitude at which to place a control point at a specified location.
+     *
+     * @param location the location of the control point.
+     *
+     * @return the appropriate altitude at which to place the control point.
+     */
+    protected double getControlPointAltitude(LatLon location)
+    {
+        return this.doGetControlPointAltitude(location, this.getShape());
+    }
+
+    protected double doGetControlPointAltitude(LatLon location, Renderable shape)
+    {
+        double altitude = 0;
+
+        if (shape instanceof Airspace)
+        {
+            Airspace airspace = (Airspace) shape;
+
+            altitude = airspace.getAltitudes()[1];
+
+            if (airspace.getAltitudeDatum()[1].equals(AVKey.ABOVE_GROUND_LEVEL))
+            {
+                LatLon refPos = airspace.getGroundReference();
+                if (refPos == null)
+                    refPos = location;
+                altitude += getWwd().getModel().getGlobe().getElevation(refPos.getLatitude(), refPos.getLongitude());
+            }
+        }
+        else if (shape instanceof Path)
+        {
+            for (Position position : ((Path) shape).getPositions())
+            {
+                if (new LatLon(position).equals(location))
+                {
+                    if (((Path) shape).getAltitudeMode() == WorldWind.ABSOLUTE)
+                        altitude = position.getAltitude();
+                    else if (((Path) shape).getAltitudeMode() == WorldWind.RELATIVE_TO_GROUND)
+                        altitude = position.getAltitude() + this.getWwd().getModel().getGlobe().getElevation(
+                            location.getLatitude(), location.getLongitude());
+                }
+            }
+        }
+        else if (shape instanceof gov.nasa.worldwind.render.Polygon)
+        {
+            for (Position position : ((gov.nasa.worldwind.render.Polygon) shape).outerBoundary())
+            {
+                if (new LatLon(position).equals(location))
+                {
+                    if (((gov.nasa.worldwind.render.Polygon) shape).getAltitudeMode() == WorldWind.ABSOLUTE)
+                        altitude = position.getAltitude();
+                    else if (((gov.nasa.worldwind.render.Polygon) shape).getAltitudeMode()
+                        == WorldWind.RELATIVE_TO_GROUND)
+                        altitude = position.getAltitude() + this.getWwd().getModel().getGlobe().getElevation(
+                            location.getLatitude(), location.getLongitude());
+                }
+            }
+        }
+
+        return altitude;
+    }
+
+    /**
+     * Indicates the current shape's altitude mode if the shape has one.
+     *
+     * @return the shape's altitude mode if it has one, otherwise <code>WorldWind.ABSOLUTE</code>.
+     */
     protected int getShapeAltitudeMode()
     {
-        int altitudeMode = WorldWind.RELATIVE_TO_GROUND;
+        int altitudeMode = WorldWind.ABSOLUTE;
 
-        if (this.shape instanceof Airspace)
+        if (this.getShape() instanceof Airspace)
         {
-            if (((Airspace) this.shape).getAltitudeDatum()[1].equals(AVKey.ABOVE_GROUND_LEVEL))
+            if (((Airspace) this.getShape()).getAltitudeDatum()[1].equals(AVKey.ABOVE_GROUND_LEVEL))
                 altitudeMode = WorldWind.RELATIVE_TO_GROUND;
-            else
-                altitudeMode = WorldWind.ABSOLUTE;
         }
-        else if (this.shape instanceof SurfaceShape)
+        else if (this.getShape() instanceof SurfaceShape)
+        {
             altitudeMode = WorldWind.CLAMP_TO_GROUND;
+        }
 
         return altitudeMode;
+    }
+
+    /**
+     * Creates a control point.
+     *
+     * @param position   the control point position.
+     * @param attributes the control point attributes.
+     * @param id         the control point ID.
+     * @param purpose    the control point purpose.
+     *
+     * @return the new control point.
+     */
+    protected ControlPointMarker makeControlPoint(Position position, MarkerAttributes attributes, int id,
+        String purpose)
+    {
+        return new ControlPointMarker(position, attributes, id, purpose);
+    }
+
+    /**
+     * Creates a control point.
+     *
+     * @param position   the control point position.
+     * @param attributes the control point attributes.
+     * @param id         the control point ID.
+     * @param leg        the control point leg.
+     * @param purpose    the control point purpose.
+     *
+     * @return the new control point.
+     */
+    protected ControlPointMarker makeControlPoint(Position position, MarkerAttributes attributes, int id,
+        int leg, String purpose)
+    {
+        return new ControlPointMarker(position, attributes, id, leg, purpose);
     }
 
     /**
@@ -1026,8 +1328,8 @@ public class ShapeEditor implements SelectListener
     protected Vec4 computeControlPointDelta(LatLon previousLocation, LatLon currentLocation)
     {
         // Compute how much the specified control point moved.
-        Vec4 terrainPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(currentLocation);
-        Vec4 previousPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(previousLocation);
+        Vec4 terrainPoint = getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(currentLocation);
+        Vec4 previousPoint = getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(previousLocation);
 
         return terrainPoint.subtract3(previousPoint);
     }
@@ -1066,7 +1368,7 @@ public class ShapeEditor implements SelectListener
      */
     protected Position computeEdgeLocation(LatLon center, LatLon location, double length)
     {
-        Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(center);
+        Vec4 centerPoint = getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(center);
         Vec4 surfaceNormal = getWwd().getModel().getGlobe().computeEllipsoidalNormalAtLocation(
             center.getLatitude(), center.getLongitude());
 
@@ -1076,9 +1378,179 @@ public class ShapeEditor implements SelectListener
 
         LatLon edgeLocation = getWwd().getModel().getGlobe().computePositionFromEllipsoidalPoint(
             vecToEdge.add3(centerPoint));
-        double edgeAltitude = this.computeControlPointAltitude(edgeLocation);
+        double edgeAltitude = this.getControlPointAltitude(edgeLocation);
 
         return new Position(edgeLocation, edgeAltitude);
+    }
+
+    /**
+     * Computes the point on a specified line segment that is nearest a specified point.
+     *
+     * @param p1    the line's first point.
+     * @param p2    the line's second point.
+     * @param point the point for which to determine a nearest point on the line segment.
+     *
+     * @return the nearest point on the line segment.
+     */
+    protected Vec4 nearestPointOnSegment(Vec4 p1, Vec4 p2, Vec4 point)
+    {
+        Vec4 segment = p2.subtract3(p1);
+        Vec4 dir = segment.normalize3();
+
+        double dot = point.subtract3(p1).dot3(dir);
+        if (dot < 0.0)
+        {
+            return p1;
+        }
+        else if (dot > segment.getLength3())
+        {
+            return p2;
+        }
+        else
+        {
+            return Vec4.fromLine3(p1, dot, dir);
+        }
+    }
+
+    /**
+     * Inserts the location nearest to a specified position on an edge of a specified list of locations into the
+     * appropriate place in that list.
+     *
+     * @param terrainPosition the position to find a nearest point for.
+     * @param altitude        the altitude to use when determining the nearest point. Can be approximate and is not
+     *                        necessarily the altitude of the terrain position.
+     * @param locations       the list of locations. This list is modified by this method to contain the new location on
+     *                        an edge nearest the specified terrain position.
+     *
+     * @return the index at which the new location was inserted into the list.
+     */
+    protected int addNearestLocation(Position terrainPosition, double altitude, List<LatLon> locations)
+    {
+        Globe globe = this.getWwd().getModel().getGlobe();
+
+        // Find the nearest edge to the picked point and insert a new position on that edge.
+        Vec4 pointPicked = globe.computeEllipsoidalPointFromPosition(terrainPosition.getLatitude(),
+            terrainPosition.getLongitude(), altitude);
+
+        Vec4 nearestPoint = null;
+        int nearestSegmentIndex = 0;
+        double nearestDistance = Double.MAX_VALUE;
+        for (int i = 1; i <= locations.size(); i++) // <= is intentional, to handle the closing segment
+        {
+            // Skip the closing segment if the shape is not a polygon.
+            if (!(this.getShape() instanceof Polygon || this.getShape() instanceof SurfacePolygon)
+                && i == locations.size())
+                continue;
+
+            LatLon locationA = locations.get(i - 1);
+            LatLon locationB = locations.get(i == locations.size() ? 0 : i);
+
+            Vec4 pointA = globe.computeEllipsoidalPointFromPosition(locationA.getLatitude(),
+                locationA.getLongitude(), altitude);
+            Vec4 pointB = globe.computeEllipsoidalPointFromPosition(locationB.getLatitude(),
+                locationB.getLongitude(), altitude);
+
+            Vec4 pointOnEdge = this.nearestPointOnSegment(pointA, pointB, pointPicked);
+            double distance = pointOnEdge.distanceTo3(pointPicked);
+            if (distance < nearestDistance)
+            {
+                nearestPoint = pointOnEdge;
+                nearestSegmentIndex = i;
+                nearestDistance = distance;
+            }
+        }
+
+        if (nearestPoint != null)
+        {
+            // Compute the location of the nearest point and add it to the shape.
+            LatLon nearestLocation = globe.computePositionFromEllipsoidalPoint(nearestPoint);
+            if (nearestSegmentIndex == locations.size())
+                locations.add(nearestLocation);
+            else
+                locations.add(nearestSegmentIndex, nearestLocation);
+            this.getControlPointLayer().setMarkers(null);
+
+            return nearestSegmentIndex;
+        }
+
+        return -1;
+    }
+
+    /**
+     * Adds a location to either the beginning or the end of a specified list of locations. Which end to add to is
+     * determined by a specified control point.
+     *
+     * @param controlPoint the control point of the shape's end. If the control point's ID is 0 the new location is
+     *                     inserted to the beginning of the list. If the control point ID corresponds to the last
+     *                     location in the list then the new location is appended to the list. Otherwise no operation
+     *                     occurs.
+     * @param locations    the shape's locations. This list is modified upon return to include the new location.
+     */
+    protected void appendLocation(ControlPointMarker controlPoint, List<LatLon> locations)
+    {
+        // Add a control point to the beginning or end of the shape.
+        Globe globe = this.getWwd().getModel().getGlobe();
+
+        if (controlPoint.getId() == 0) // beginning of list
+        {
+            Vec4 pointA = globe.computeEllipsoidalPointFromLocation(locations.get(0));
+            Vec4 pointB = globe.computeEllipsoidalPointFromLocation(locations.get(1));
+            Vec4 newPoint = pointA.add3(pointA.subtract3(pointB).multiply3(0.1));
+            locations.add(0, globe.computePositionFromEllipsoidalPoint(newPoint));
+        }
+        else if (controlPoint.getId() == locations.size() - 1) // end of list
+        {
+            Vec4 pointA = globe.computeEllipsoidalPointFromLocation(locations.get(locations.size() - 2));
+            Vec4 pointB = globe.computeEllipsoidalPointFromLocation(locations.get(locations.size() - 1));
+            Vec4 newPoint = pointB.add3(pointB.subtract3(pointA).multiply3(0.1));
+            locations.add(globe.computePositionFromEllipsoidalPoint(newPoint));
+        }
+    }
+
+    /**
+     * Moves a control point location.
+     *
+     * @param controlPoint    the control point being moved.
+     * @param terrainPosition the position selected by the user.
+     * @param locations       the list of locations for the shape.
+     */
+    protected void moveLocation(ControlPointMarker controlPoint, Position terrainPosition, List<LatLon> locations)
+    {
+        // Compute the new location for the polygon location associated with the incoming control point.
+        Vec4 delta = this.computeControlPointDelta(this.getPreviousPosition(), terrainPosition);
+        Vec4 markerPoint = getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            new Position(controlPoint.getPosition(), 0));
+        Position markerPosition = getWwd().getModel().getGlobe().computePositionFromEllipsoidalPoint(
+            markerPoint.add3(delta));
+
+        // Update the polygon's locations.
+        locations.set(controlPoint.getId(), markerPosition);
+    }
+
+    /**
+     * Rotates a shape's locations.
+     *
+     * @param terrainPosition the position selected by the user.
+     * @param locations       the list of locations for the shape.
+     */
+    protected void rotateLocations(Position terrainPosition, List<LatLon> locations)
+    {
+        // Rotate the positions.
+        LatLon center = LatLon.getCenter(this.getWwd().getModel().getGlobe(), locations); // rotation axis
+        Angle previousHeading = LatLon.greatCircleAzimuth(center, this.getPreviousPosition());
+        Angle deltaHeading = LatLon.greatCircleAzimuth(center, terrainPosition).subtract(previousHeading);
+        this.currentHeading = this.normalizedHeading(this.getCurrentHeading(), deltaHeading);
+
+        // Rotate the polygon's locations by the heading delta angle.
+        for (int i = 0; i < locations.size(); i++)
+        {
+            LatLon location = locations.get(i);
+
+            Angle heading = LatLon.greatCircleAzimuth(center, location);
+            Angle distance = LatLon.greatCircleDistance(center, location);
+            LatLon newLocation = LatLon.greatCircleEndPosition(center, heading.add(deltaHeading), distance);
+            locations.set(i, newLocation);
+        }
     }
 
     /**
@@ -1091,57 +1563,62 @@ public class ShapeEditor implements SelectListener
     {
         Iterable<? extends LatLon> currentLocations = null;
 
-        if (this.shape instanceof Polygon)
-            currentLocations = ((Polygon) this.shape).getLocations();
-        else if (this.shape instanceof Curtain)
-            currentLocations = ((Curtain) this.shape).getLocations();
+        if (this.getShape() instanceof Polygon)
+            currentLocations = ((Polygon) this.getShape()).getLocations();
+        else if (this.getShape() instanceof Curtain)
+            currentLocations = ((Curtain) this.getShape()).getLocations();
 
         if (currentLocations == null)
             return;
 
-        // Assemble a local list of the polygon's locations.
+        // Assemble a local copy of the polygon's locations.
         java.util.List<LatLon> locations = new ArrayList<LatLon>();
         for (LatLon location : currentLocations)
         {
             locations.add(location);
         }
 
-        if (controlPoint.getPurpose().equals(ROTATION))
+        if (controlPoint != null && controlPoint.getPurpose().equals(ROTATION))
         {
             // Rotate the polygon.
-            LatLon center = LatLon.getCenter(locations); // rotation axis
-            Angle oldHeading = LatLon.greatCircleAzimuth(center, this.previousPosition);
-            Angle deltaHeading = LatLon.greatCircleAzimuth(center, terrainPosition).subtract(oldHeading);
-            this.currentHeading = this.normalizedHeading(this.currentHeading, deltaHeading);
-
-            // Rotate the polygon's locations by the heading delta angle.
-            for (int i = 0; i < locations.size(); i++)
+            this.rotateLocations(terrainPosition, locations);
+        }
+        else if (controlPoint != null) // location change or add/delete control point
+        {
+            if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.ALT_DOWN_MASK) != 0)
             {
-                LatLon location = locations.get(i);
-
-                Angle heading = LatLon.greatCircleAzimuth(center, location);
-                Angle distance = LatLon.greatCircleDistance(center, location);
-                LatLon newLocation = LatLon.greatCircleEndPosition(center, heading.add(deltaHeading), distance);
-                locations.set(i, newLocation);
+                int minSize = this.getShape() instanceof Polygon ? 3 : 2;
+                if (locations.size() > minSize)
+                {
+                    // Delete the control point.
+                    locations.remove(controlPoint.getId());
+                    this.getControlPointLayer().setMarkers(null);
+                }
+            }
+            else if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) != 0
+                && this.getShape() instanceof Curtain)
+            {
+                // Add a new control point.
+                this.appendLocation(controlPoint, locations);
+                this.getControlPointLayer().setMarkers(null);
+            }
+            else // control point location change
+            {
+                this.moveLocation(controlPoint, terrainPosition, locations);
             }
         }
-        else // location change
+        else if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) != 0)
         {
-            // Compute the new location for the polygon location associated with the incoming control point.
-            Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
-            Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(
-                new Position(controlPoint.getPosition(), 0));
-            Position markerPosition = wwd.getModel().getGlobe().computePositionFromEllipsoidalPoint(
-                markerPoint.add3(delta));
-
-            // Update the polygon's locations.
-            locations.set(controlPoint.getId(), markerPosition);
+            // Insert a new location along an edge of the polygon.
+            double altitude = ((Airspace) this.getShape()).getAltitudes()[1];
+            this.addNearestLocation(terrainPosition, altitude, locations);
         }
 
-        if (this.shape instanceof Polygon)
-            ((Polygon) this.shape).setLocations(locations);
-        else if (this.shape instanceof Curtain)
-            ((Curtain) this.shape).setLocations(locations);
+        // Update the shape's locations.
+        if (this.getShape() instanceof Polygon)
+            ((Polygon) this.getShape()).setLocations(locations);
+        else if (this.getShape() instanceof Curtain)
+            ((Curtain) this.getShape()).setLocations(locations);
     }
 
     /**
@@ -1151,10 +1628,10 @@ public class ShapeEditor implements SelectListener
     {
         Iterable<? extends LatLon> currentLocations = null;
 
-        if (this.shape instanceof Polygon)
-            currentLocations = ((Polygon) this.shape).getLocations();
-        else if (this.shape instanceof Curtain)
-            currentLocations = ((Curtain) this.shape).getLocations();
+        if (this.getShape() instanceof Polygon)
+            currentLocations = ((Polygon) this.getShape()).getLocations();
+        else if (this.getShape() instanceof Curtain)
+            currentLocations = ((Curtain) this.getShape()).getLocations();
 
         if (currentLocations == null)
             return;
@@ -1168,14 +1645,19 @@ public class ShapeEditor implements SelectListener
         if (locations.size() < 2)
             return;
 
-        LatLon polygonCenter = LatLon.getCenter(locations);
-        double centerAltitude = this.computeControlPointAltitude(polygonCenter);
-        Angle shapeRadius = LatLon.getAverageDistance(locations);
-        Angle heading = this.currentHeading;
-        LatLon rotationControlLocation = LatLon.greatCircleEndPosition(polygonCenter, heading, shapeRadius);
-        double rotationControlAltitude = this.computeControlPointAltitude(rotationControlLocation);
+        Globe globe = this.getWwd().getModel().getGlobe();
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        LatLon polygonCenter = LatLon.getCenter(globe, locations);
+        double centerAltitude = this.getControlPointAltitude(polygonCenter);
+
+        // Compute the shape's heading and the rotation control location.
+        Angle shapeRadius = LatLon.getAverageDistance(globe, polygonCenter, locations);
+        shapeRadius = shapeRadius.multiply(1.2);
+        Angle heading = this.getCurrentHeading();
+        LatLon rotationControlLocation = LatLon.greatCircleEndPosition(polygonCenter, heading, shapeRadius);
+        double rotationControlAltitude = this.getControlPointAltitude(rotationControlLocation);
+
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             // Create control points for the polygon locations.
@@ -1183,16 +1665,17 @@ public class ShapeEditor implements SelectListener
             int i = 0;
             for (LatLon location : locations)
             {
-                double altitude = this.computeControlPointAltitude(location);
+                double altitude = this.getControlPointAltitude(location);
                 Position cpPosition = new Position(location, altitude);
-                controlPoints.add(new ControlPointMarker(cpPosition, this.locationMarkerAttributes, i++, LOCATION));
+                controlPoints.add(
+                    this.makeControlPoint(cpPosition, this.getLocationControlPointAttributes(), i++, LOCATION));
             }
 
             // Create a control point for the rotation control.
             Position cpPosition = new Position(rotationControlLocation, rotationControlAltitude);
-            controlPoints.add(new ControlPointMarker(cpPosition, this.angleMarkerAttributes, i, ROTATION));
+            controlPoints.add(this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), i, ROTATION));
 
-            this.controlPointLayer.setMarkers(controlPoints);
+            this.getControlPointLayer().setMarkers(controlPoints);
         }
         else
         {
@@ -1200,7 +1683,7 @@ public class ShapeEditor implements SelectListener
             Iterator<Marker> markerIterator = markers.iterator();
             for (LatLon location : locations)
             {
-                double altitude = this.computeControlPointAltitude(location);
+                double altitude = this.getControlPointAltitude(location);
                 markerIterator.next().setPosition(new Position(location, altitude));
             }
 
@@ -1209,7 +1692,7 @@ public class ShapeEditor implements SelectListener
         }
 
         // Update the heading annotation.
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         for (LatLon ignored : locations)
         {
             markerIterator.next();
@@ -1229,14 +1712,18 @@ public class ShapeEditor implements SelectListener
      */
     protected void reshapeCappedCylinder(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        CappedCylinder cylinder = (CappedCylinder) this.shape;
+        if (controlPoint == null)
+            return; // Cannot add locations to this shape.
+
+        CappedCylinder cylinder = (CappedCylinder) this.getShape();
         double[] radii = cylinder.getRadii();
 
-        Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(cylinder.getCenter());
-        Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(controlPoint.getPosition());
+        Vec4 centerPoint = getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(cylinder.getCenter());
+        Vec4 markerPoint = getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            controlPoint.getPosition());
         Vec4 vMarker = markerPoint.subtract3(centerPoint).normalize3();
 
-        Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
+        Vec4 delta = this.computeControlPointDelta(this.getPreviousPosition(), terrainPosition);
         if (controlPoint.getPurpose().equals(OUTER_RADIUS))
             radii[1] += delta.dot3(vMarker);
         else if (controlPoint.getPurpose().equals(INNER_RADIUS))
@@ -1245,9 +1732,9 @@ public class ShapeEditor implements SelectListener
         if (radii[0] >= 0 && radii[1] > 0 && radii[0] < radii[1])
             cylinder.setRadii(radii[0], radii[1]);
 
-        if (this.shape instanceof PartialCappedCylinder)
+        if (this.getShape() instanceof PartialCappedCylinder)
         {
-            Angle oldHeading = LatLon.greatCircleAzimuth(cylinder.getCenter(), this.previousPosition);
+            Angle oldHeading = LatLon.greatCircleAzimuth(cylinder.getCenter(), this.getPreviousPosition());
             Angle deltaHeading = LatLon.greatCircleAzimuth(cylinder.getCenter(), terrainPosition).subtract(oldHeading);
 
             Angle[] azimuths = ((PartialCappedCylinder) cylinder).getAzimuths();
@@ -1257,7 +1744,7 @@ public class ShapeEditor implements SelectListener
                 azimuths[1] = this.normalizedHeading(azimuths[1], deltaHeading);
             else if (controlPoint.getPurpose().equals(ROTATION))
             {
-                this.currentHeading = this.normalizedHeading(this.currentHeading, deltaHeading);
+                this.currentHeading = this.normalizedHeading(this.getCurrentHeading(), deltaHeading);
                 azimuths[0] = this.normalizedHeading(azimuths[0], deltaHeading);
                 azimuths[1] = this.normalizedHeading(azimuths[1], deltaHeading);
             }
@@ -1272,30 +1759,31 @@ public class ShapeEditor implements SelectListener
      */
     protected void updateCappedCylinderControlPoints()
     {
-        CappedCylinder cylinder = (CappedCylinder) this.shape;
+        CappedCylinder cylinder = (CappedCylinder) this.getShape();
         double[] radii = cylinder.getRadii();
         boolean hasInnerRadius = radii[0] > 0;
 
         LatLon outerRadiusLocation = LatLon.greatCircleEndPosition(cylinder.getCenter(), Angle.fromDegrees(90),
-            Angle.fromRadians(radii[1] / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(radii[1] / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
         LatLon innerRadiusLocation = LatLon.greatCircleEndPosition(cylinder.getCenter(), Angle.fromDegrees(90),
-            Angle.fromRadians(radii[0] / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(radii[0] / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
-        double outerRadiusAltitude = this.computeControlPointAltitude(outerRadiusLocation);
-        double innerRadiusAltitude = this.computeControlPointAltitude(innerRadiusLocation);
+        double outerRadiusAltitude = this.getControlPointAltitude(outerRadiusLocation);
+        double innerRadiusAltitude = this.getControlPointAltitude(innerRadiusLocation);
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             java.util.List<Marker> markerList = new ArrayList<Marker>(1);
             Position cpPosition = new Position(outerRadiusLocation, outerRadiusAltitude);
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 0, OUTER_RADIUS));
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 0, OUTER_RADIUS));
             if (hasInnerRadius)
             {
                 cpPosition = new Position(innerRadiusLocation, innerRadiusAltitude);
-                markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 1, INNER_RADIUS));
+                markerList.add(
+                    this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 1, INNER_RADIUS));
             }
-            this.controlPointLayer.setMarkers(markerList);
+            this.getControlPointLayer().setMarkers(markerList);
         }
         else
         {
@@ -1305,7 +1793,7 @@ public class ShapeEditor implements SelectListener
                 markerIterator.next().setPosition(new Position(innerRadiusLocation, innerRadiusAltitude));
         }
 
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         ((ControlPointMarker) markerIterator.next()).size = radii[1];
         if (hasInnerRadius)
             ((ControlPointMarker) markerIterator.next()).size = radii[0];
@@ -1317,7 +1805,7 @@ public class ShapeEditor implements SelectListener
      */
     protected void updatePartialCappedCylinderControlPoints()
     {
-        PartialCappedCylinder cylinder = (PartialCappedCylinder) this.shape;
+        PartialCappedCylinder cylinder = (PartialCappedCylinder) this.getShape();
 
         double[] radii = cylinder.getRadii();
         boolean hasInnerRadius = radii[0] > 0;
@@ -1326,48 +1814,48 @@ public class ShapeEditor implements SelectListener
         Angle[] azimuths = cylinder.getAzimuths();
 
         LatLon outerRadiusLocation = LatLon.greatCircleEndPosition(cylinder.getCenter(), azimuths[1],
-            Angle.fromRadians(radii[1] / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(radii[1] / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
         LatLon innerRadiusLocation = LatLon.greatCircleEndPosition(cylinder.getCenter(), azimuths[1],
-            Angle.fromRadians(radii[0] / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(radii[0] / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
         LatLon leftAzimuthLocation = LatLon.greatCircleEndPosition(cylinder.getCenter(), azimuths[0],
-            Angle.fromRadians(averageRadius / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(averageRadius / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
         LatLon rightAzimuthLocation = LatLon.greatCircleEndPosition(cylinder.getCenter(), azimuths[1],
-            Angle.fromRadians(averageRadius / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(averageRadius / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
-        double outerRadiusAltitude = this.computeControlPointAltitude(outerRadiusLocation);
-        double innerRadiusAltitude = this.computeControlPointAltitude(innerRadiusLocation);
-        double rightAzimuthAltitude = this.computeControlPointAltitude(rightAzimuthLocation);
-        double leftAzimuthAltitude = this.computeControlPointAltitude(leftAzimuthLocation);
+        double outerRadiusAltitude = this.getControlPointAltitude(outerRadiusLocation);
+        double innerRadiusAltitude = this.getControlPointAltitude(innerRadiusLocation);
+        double rightAzimuthAltitude = this.getControlPointAltitude(rightAzimuthLocation);
+        double leftAzimuthAltitude = this.getControlPointAltitude(leftAzimuthLocation);
 
-        LatLon rotationControlLocation = LatLon.greatCircleEndPosition(cylinder.getCenter(), this.currentHeading,
-            Angle.fromRadians(1.2 * radii[1] / this.wwd.getModel().getGlobe().getEquatorialRadius()));
-        double rotationControlAltitude = this.computeControlPointAltitude(rotationControlLocation);
+        LatLon rotationControlLocation = LatLon.greatCircleEndPosition(cylinder.getCenter(), this.getCurrentHeading(),
+            Angle.fromRadians(1.2 * radii[1] / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
+        double rotationControlAltitude = this.getControlPointAltitude(rotationControlLocation);
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             java.util.List<Marker> markerList = new ArrayList<Marker>(1);
             Position cpPosition = new Position(outerRadiusLocation, outerRadiusAltitude);
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 0, OUTER_RADIUS));
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 0, OUTER_RADIUS));
             if (hasInnerRadius)
             {
                 cpPosition = new Position(innerRadiusLocation, innerRadiusAltitude);
                 markerList.add(
-                    new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 1, INNER_RADIUS));
+                    this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 1, INNER_RADIUS));
             }
 
             cpPosition = new Position(leftAzimuthLocation, leftAzimuthAltitude);
             markerList.add(
-                new ControlPointMarker(cpPosition, this.angleMarkerAttributes, 2, LEFT_AZIMUTH));
+                this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), 2, LEFT_AZIMUTH));
             cpPosition = new Position(rightAzimuthLocation, rightAzimuthAltitude);
             markerList.add(
-                new ControlPointMarker(cpPosition, this.angleMarkerAttributes, 3, RIGHT_AZIMUTH));
+                this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), 3, RIGHT_AZIMUTH));
 
             cpPosition = new Position(rotationControlLocation, rotationControlAltitude);
-            markerList.add(new ControlPointMarker(cpPosition, this.angleMarkerAttributes, 4, ROTATION));
+            markerList.add(this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), 4, ROTATION));
 
-            this.controlPointLayer.setMarkers(markerList);
+            this.getControlPointLayer().setMarkers(markerList);
         }
         else
         {
@@ -1381,7 +1869,7 @@ public class ShapeEditor implements SelectListener
             markerIterator.next().setPosition(new Position(rotationControlLocation, rotationControlAltitude));
         }
 
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         ((ControlPointMarker) markerIterator.next()).size = radii[1];
         if (hasInnerRadius)
             ((ControlPointMarker) markerIterator.next()).size = radii[0];
@@ -1389,10 +1877,10 @@ public class ShapeEditor implements SelectListener
         ((ControlPointMarker) markerIterator.next()).rotation = azimuths[0];
         ((ControlPointMarker) markerIterator.next()).rotation = azimuths[1];
 
-        ((ControlPointMarker) markerIterator.next()).rotation = this.currentHeading;
+        ((ControlPointMarker) markerIterator.next()).rotation = this.getCurrentHeading();
 
         // Update the rotation orientation line.
-        double centerAltitude = this.computeControlPointAltitude(cylinder.getCenter());
+        double centerAltitude = this.getControlPointAltitude(cylinder.getCenter());
         this.updateOrientationLine(new Position(cylinder.getCenter(), centerAltitude),
             new Position(rotationControlLocation, rotationControlAltitude));
     }
@@ -1405,14 +1893,19 @@ public class ShapeEditor implements SelectListener
      */
     protected void reshapeSphere(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        SphereAirspace sphere = (SphereAirspace) this.shape;
+        if (controlPoint == null)
+            return; // Cannot add locations to this shape.
+
+        SphereAirspace sphere = (SphereAirspace) this.getShape();
         double radius = sphere.getRadius();
 
-        Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(sphere.getLocation());
-        Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(controlPoint.getPosition());
+        Vec4 centerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            sphere.getLocation());
+        Vec4 markerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            controlPoint.getPosition());
         Vec4 vMarker = markerPoint.subtract3(centerPoint).normalize3();
 
-        Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
+        Vec4 delta = this.computeControlPointDelta(this.getPreviousPosition(), terrainPosition);
         if (controlPoint.getPurpose().equals(OUTER_RADIUS))
             radius += delta.dot3(vMarker);
 
@@ -1426,21 +1919,21 @@ public class ShapeEditor implements SelectListener
      */
     protected void updateSphereControlPoints()
     {
-        SphereAirspace sphere = (SphereAirspace) this.shape;
+        SphereAirspace sphere = (SphereAirspace) this.getShape();
         double radius = sphere.getRadius();
 
         LatLon radiusLocation = LatLon.greatCircleEndPosition(sphere.getLocation(), Angle.fromDegrees(90),
-            Angle.fromRadians(radius / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(radius / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
-        double radiusAltitude = this.computeControlPointAltitude(radiusLocation);
+        double radiusAltitude = this.getControlPointAltitude(radiusLocation);
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             java.util.List<Marker> markerList = new ArrayList<Marker>(1);
             Position cpPosition = new Position(radiusLocation, radiusAltitude);
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 0, OUTER_RADIUS));
-            this.controlPointLayer.setMarkers(markerList);
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 0, OUTER_RADIUS));
+            this.getControlPointLayer().setMarkers(markerList);
         }
         else
         {
@@ -1448,7 +1941,7 @@ public class ShapeEditor implements SelectListener
             markerIterator.next().setPosition(new Position(radiusLocation, radiusAltitude));
         }
 
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         ((ControlPointMarker) markerIterator.next()).size = radius;
     }
 
@@ -1460,25 +1953,28 @@ public class ShapeEditor implements SelectListener
      */
     protected void reshapeOrbit(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        Orbit orbit = (Orbit) this.shape;
+        if (controlPoint == null)
+            return; // Cannot add locations to this shape.
+
+        Orbit orbit = (Orbit) this.getShape();
         LatLon[] locations = orbit.getLocations();
         double width = orbit.getWidth();
 
         LatLon center = LatLon.interpolateGreatCircle(0.5, locations[0], locations[1]);
-        Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(center);
+        Vec4 centerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(center);
 
-        Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(
+        Vec4 markerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
             new Position(controlPoint.getPosition(), 0));
 
         if (controlPoint.getPurpose().equals(RIGHT_WIDTH))
         {
-            Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
+            Vec4 delta = this.computeControlPointDelta(this.getPreviousPosition(), terrainPosition);
             Vec4 vMarker = markerPoint.subtract3(centerPoint).normalize3();
             orbit.setWidth(width + delta.dot3(vMarker));
         }
         else if (controlPoint.getPurpose().equals(ROTATION))
         {
-            Angle oldHeading = LatLon.greatCircleAzimuth(center, this.previousPosition);
+            Angle oldHeading = LatLon.greatCircleAzimuth(center, this.getPreviousPosition());
             Angle deltaHeading = LatLon.greatCircleAzimuth(center, terrainPosition).subtract(oldHeading);
 
             for (int i = 0; i < 2; i++)
@@ -1491,8 +1987,8 @@ public class ShapeEditor implements SelectListener
         }
         else // location change
         {
-            Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
-            Position markerPosition = wwd.getModel().getGlobe().computePositionFromEllipsoidalPoint(
+            Vec4 delta = this.computeControlPointDelta(this.getPreviousPosition(), terrainPosition);
+            Position markerPosition = this.getWwd().getModel().getGlobe().computePositionFromEllipsoidalPoint(
                 markerPoint.add3(delta));
             locations[controlPoint.getId()] = markerPosition;
             orbit.setLocations(locations[0], locations[1]);
@@ -1504,40 +2000,43 @@ public class ShapeEditor implements SelectListener
      */
     protected void updateOrbitControlPoints()
     {
-        Orbit orbit = (Orbit) this.shape;
+        Orbit orbit = (Orbit) this.getShape();
         LatLon[] locations = orbit.getLocations();
         double width = orbit.getWidth();
 
-        double location0Altitude = this.computeControlPointAltitude(locations[0]);
-        double location1Altitude = this.computeControlPointAltitude(locations[1]);
+        double location0Altitude = this.getControlPointAltitude(locations[0]);
+        double location1Altitude = this.getControlPointAltitude(locations[1]);
 
         Angle orbitHeading = LatLon.greatCircleAzimuth(locations[0], locations[1]);
 
         LatLon center = LatLon.interpolateGreatCircle(0.5, locations[0], locations[1]);
-        double centerAltitude = this.computeControlPointAltitude(center);
+        double centerAltitude = this.getControlPointAltitude(center);
         Position widthPosition = this.computeEdgeLocation(center, locations[0], 0.5 * orbit.getWidth());
 
-        Angle distance = LatLon.greatCircleDistance(center, locations[0]);
-        LatLon rotationControlLocation = LatLon.greatCircleEndPosition(center, Angle.fromDegrees(orbitHeading.degrees),
-            Angle.fromRadians(distance.radians + 1.2 * width / this.wwd.getModel().getGlobe().getEquatorialRadius()));
-        double rotationControlAltitude = this.computeControlPointAltitude(rotationControlLocation);
+        Globe globe = this.getWwd().getModel().getGlobe();
+        Vec4 centerPoint = globe.computeEllipsoidalPointFromLocation(center);
+        Vec4 point0 = globe.computeEllipsoidalPointFromLocation(locations[1]);
+        Vec4 vec = point0.subtract3(centerPoint);
+        vec = vec.multiply3(1 + width / vec.getLength3());
+        LatLon rotationControlLocation = globe.computePositionFromEllipsoidalPoint(vec.add3(centerPoint));
+        double rotationControlAltitude = this.getControlPointAltitude(rotationControlLocation);
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             java.util.List<Marker> markerList = new ArrayList<Marker>(1);
             Position cpPosition = new Position(locations[0], location0Altitude);
-            markerList.add(new ControlPointMarker(cpPosition, this.locationMarkerAttributes, 0, LOCATION));
+            markerList.add(this.makeControlPoint(cpPosition, this.getLocationControlPointAttributes(), 0, LOCATION));
             cpPosition = new Position(locations[1], location1Altitude);
-            markerList.add(new ControlPointMarker(cpPosition, this.locationMarkerAttributes, 1, LOCATION));
+            markerList.add(this.makeControlPoint(cpPosition, this.getLocationControlPointAttributes(), 1, LOCATION));
 
             cpPosition = new Position(widthPosition, widthPosition.getAltitude());
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 2, RIGHT_WIDTH));
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 2, RIGHT_WIDTH));
 
             cpPosition = new Position(rotationControlLocation, rotationControlAltitude);
-            markerList.add(new ControlPointMarker(cpPosition, this.angleMarkerAttributes, 3, ROTATION));
+            markerList.add(this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), 3, ROTATION));
 
-            this.controlPointLayer.setMarkers(markerList);
+            this.getControlPointLayer().setMarkers(markerList);
         }
         else
         {
@@ -1548,7 +2047,7 @@ public class ShapeEditor implements SelectListener
             markerIterator.next().setPosition(new Position(rotationControlLocation, rotationControlAltitude));
         }
 
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         markerIterator.next();
         markerIterator.next();
         ((ControlPointMarker) markerIterator.next()).size = width;
@@ -1566,7 +2065,7 @@ public class ShapeEditor implements SelectListener
      */
     protected void reshapeRoute(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        Route route = (Route) this.shape;
+        Route route = (Route) this.getShape();
 
         java.util.List<LatLon> locations = new ArrayList<LatLon>();
         for (LatLon ll : route.getLocations())
@@ -1574,43 +2073,50 @@ public class ShapeEditor implements SelectListener
             locations.add(ll);
         }
 
-        if (controlPoint.getPurpose().equals(ROTATION))
+        if (controlPoint != null && controlPoint.getPurpose().equals(ROTATION))
         {
-            LatLon center = LatLon.getCenter(locations);
-            Angle oldHeading = LatLon.greatCircleAzimuth(center, this.previousPosition);
-            Angle deltaHeading = LatLon.greatCircleAzimuth(center, terrainPosition).subtract(oldHeading);
-            this.currentHeading = this.normalizedHeading(this.currentHeading, deltaHeading);
-
-            for (int i = 0; i < locations.size(); i++)
-            {
-                LatLon location = locations.get(i);
-
-                Angle heading = LatLon.greatCircleAzimuth(center, location);
-                Angle distance = LatLon.greatCircleDistance(center, location);
-                LatLon newLocation = LatLon.greatCircleEndPosition(center, heading.add(deltaHeading), distance);
-                locations.set(i, newLocation);
-            }
+            this.rotateLocations(terrainPosition, locations);
             route.setLocations(locations);
         }
-        else if (controlPoint.getPurpose().equals(LEFT_WIDTH) || controlPoint.getPurpose().equals(RIGHT_WIDTH))
+        else if (controlPoint != null
+            && (controlPoint.getPurpose().equals(LEFT_WIDTH) || controlPoint.getPurpose().equals(RIGHT_WIDTH)))
         {
             LatLon legCenter = LatLon.interpolateGreatCircle(0.5, locations.get(0), locations.get(1));
-            Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(legCenter);
-            Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            Vec4 centerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(legCenter);
+            Vec4 markerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
                 new Position(controlPoint.getPosition(), 0));
             Vec4 vMarker = markerPoint.subtract3(centerPoint).normalize3();
-            Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
+            Vec4 delta = this.computeControlPointDelta(this.getPreviousPosition(), terrainPosition);
             route.setWidth(route.getWidth() + delta.dot3(vMarker));
         }
-        else // location change
+        else if (controlPoint != null) // location change or add/delete control point
         {
-            Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
-            Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(
-                new Position(controlPoint.getPosition(), 0));
-            Position markerPosition = wwd.getModel().getGlobe().computePositionFromEllipsoidalPoint(
-                markerPoint.add3(delta));
+            if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.ALT_DOWN_MASK) != 0)
+            {
+                if (locations.size() > 2)
+                {
+                    // Delete the control point.
+                    locations.remove(controlPoint.getId());
+                    this.getControlPointLayer().setMarkers(null);
+                }
+            }
+            else if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) != 0)
+            {
+                this.appendLocation(controlPoint, locations);
+                this.getControlPointLayer().setMarkers(null);
+            }
+            else // control point location change
+            {
+                this.moveLocation(controlPoint, terrainPosition, locations);
+            }
 
-            locations.set(controlPoint.getId(), markerPosition);
+            route.setLocations(locations);
+        }
+        else if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) != 0)
+        {
+            // Insert a new position into the shape.
+            double altitude = ((Airspace) this.getShape()).getAltitudes()[1];
+            this.addNearestLocation(terrainPosition, altitude, locations);
             route.setLocations(locations);
         }
     }
@@ -1620,7 +2126,7 @@ public class ShapeEditor implements SelectListener
      */
     protected void updateRouteControlPoints()
     {
-        Route route = (Route) this.shape;
+        Route route = (Route) this.getShape();
 
         if (route.getLocations() == null)
             return;
@@ -1634,63 +2140,69 @@ public class ShapeEditor implements SelectListener
         if (locations.size() < 2)
             return;
 
-        LatLon legCenter = LatLon.interpolateGreatCircle(0.5, locations.get(0), locations.get(1));
+        Globe globe = this.getWwd().getModel().getGlobe();
+        LatLon legCenter = LatLon.getCenter(globe, locations.subList(0, 2));
         Position leftWidthPosition = this.computeEdgeLocation(legCenter, locations.get(1), 0.5 * route.getWidth());
         Position rightWidthPosition = this.computeEdgeLocation(legCenter, locations.get(0), 0.5 * route.getWidth());
 
-        LatLon center = LatLon.getCenter(locations);
-        double centerAltitude = this.computeControlPointAltitude(center);
-        Angle averageDistance = LatLon.getAverageDistance(locations);
-        LatLon rotationLocation = LatLon.greatCircleEndPosition(center, this.currentHeading, averageDistance);
-        double rotationAltitude = this.computeControlPointAltitude(rotationLocation);
+        LatLon routeCenter = LatLon.getCenter(globe, locations);
+        double centerAltitude = this.getControlPointAltitude(routeCenter);
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        // Compute the shape's heading and the rotation control location.
+        Angle shapeRadius = LatLon.greatCircleDistance(routeCenter, locations.get(1));
+        shapeRadius = shapeRadius.add(Angle.fromRadians(route.getWidth() / globe.getEquatorialRadius()));
+        Angle heading = this.getCurrentHeading();
+        LatLon rotationControlLocation = LatLon.greatCircleEndPosition(routeCenter, heading, shapeRadius);
+        double rotationControlAltitude = this.getControlPointAltitude(rotationControlLocation);
+
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             ArrayList<Marker> controlPoints = new ArrayList<Marker>();
             int i = 0;
             for (LatLon cpPosition : locations)
             {
-                double altitude = this.computeControlPointAltitude(cpPosition);
+                double altitude = this.getControlPointAltitude(cpPosition);
                 Position position = new Position(cpPosition, altitude);
-                controlPoints.add(new ControlPointMarker(position, this.locationMarkerAttributes, i++, LOCATION));
+                controlPoints.add(
+                    this.makeControlPoint(position, this.getLocationControlPointAttributes(), i++, LOCATION));
             }
 
             Position position = new Position(leftWidthPosition, leftWidthPosition.getAltitude());
-            controlPoints.add(new ControlPointMarker(position, this.sizeMarkerAttributes, i++, RIGHT_WIDTH));
+            controlPoints.add(this.makeControlPoint(position, this.getSizeControlPointAttributes(), i++, RIGHT_WIDTH));
             position = new Position(rightWidthPosition, rightWidthPosition.getAltitude());
-            controlPoints.add(new ControlPointMarker(position, this.sizeMarkerAttributes, i++, LEFT_WIDTH));
+            controlPoints.add(this.makeControlPoint(position, this.getSizeControlPointAttributes(), i++, LEFT_WIDTH));
 
-            position = new Position(rotationLocation, rotationAltitude);
-            controlPoints.add(new ControlPointMarker(position, this.angleMarkerAttributes, i, ROTATION));
+            position = new Position(rotationControlLocation, rotationControlAltitude);
+            controlPoints.add(this.makeControlPoint(position, this.getAngleControlPointAttributes(), i, ROTATION));
 
-            this.controlPointLayer.setMarkers(controlPoints);
+            this.getControlPointLayer().setMarkers(controlPoints);
         }
         else
         {
             Iterator<Marker> markerIterator = markers.iterator();
             for (LatLon cpPosition : locations)
             {
-                double altitude = this.computeControlPointAltitude(cpPosition);
+                double altitude = this.getControlPointAltitude(cpPosition);
                 markerIterator.next().setPosition(new Position(cpPosition, altitude));
             }
 
             markerIterator.next().setPosition(new Position(leftWidthPosition, leftWidthPosition.getAltitude()));
             markerIterator.next().setPosition(new Position(rightWidthPosition, rightWidthPosition.getAltitude()));
-            markerIterator.next().setPosition(new Position(rotationLocation, rotationAltitude));
+            markerIterator.next().setPosition(new Position(rotationControlLocation, rotationControlAltitude));
         }
 
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         for (LatLon ignored : locations) // skip over the locations to get to the width and rotation control points
         {
             markerIterator.next();
         }
         ((ControlPointMarker) markerIterator.next()).size = route.getWidth();
         ((ControlPointMarker) markerIterator.next()).size = route.getWidth();
-        ((ControlPointMarker) markerIterator.next()).rotation = this.currentHeading;
+        ((ControlPointMarker) markerIterator.next()).rotation = heading;
 
-        this.updateOrientationLine(new Position(center, centerAltitude),
-            new Position(rotationLocation, rotationAltitude));
+        this.updateOrientationLine(new Position(routeCenter, centerAltitude),
+            new Position(rotationControlLocation, rotationControlAltitude));
     }
 
     /**
@@ -1701,10 +2213,10 @@ public class ShapeEditor implements SelectListener
      */
     protected void reshapeTrack(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        TrackAirspace track = (TrackAirspace) this.shape;
+        TrackAirspace track = (TrackAirspace) this.getShape();
         List<Box> legs = track.getLegs();
 
-        if (controlPoint.getPurpose().equals(ROTATION))
+        if (controlPoint != null && controlPoint.getPurpose().equals(ROTATION))
         {
             List<LatLon> trackLocations = new ArrayList<LatLon>();
             for (Box leg : legs)
@@ -1712,10 +2224,10 @@ public class ShapeEditor implements SelectListener
                 trackLocations.add(leg.getLocations()[0]);
                 trackLocations.add(leg.getLocations()[1]);
             }
-            LatLon center = LatLon.getCenter(trackLocations);
-            Angle oldHeading = LatLon.greatCircleAzimuth(center, this.previousPosition);
-            Angle deltaHeading = LatLon.greatCircleAzimuth(center, terrainPosition).subtract(oldHeading);
-            this.currentHeading = this.normalizedHeading(this.currentHeading, deltaHeading);
+            LatLon center = LatLon.getCenter(this.getWwd().getModel().getGlobe(), trackLocations);
+            Angle previousHeading = LatLon.greatCircleAzimuth(center, this.getPreviousPosition());
+            Angle deltaHeading = LatLon.greatCircleAzimuth(center, terrainPosition).subtract(previousHeading);
+            this.currentHeading = this.normalizedHeading(this.getCurrentHeading(), deltaHeading);
 
             // Rotate all the legs.
             for (Box leg : legs)
@@ -1732,21 +2244,24 @@ public class ShapeEditor implements SelectListener
 
                 leg.setLocations(locations[0], locations[1]);
             }
+
+            track.setLegs(new ArrayList<Box>(track.getLegs()));
         }
-        else if (controlPoint.getPurpose().equals(LEFT_WIDTH) || controlPoint.getPurpose().equals(RIGHT_WIDTH))
+        else if (controlPoint != null
+            && (controlPoint.getPurpose().equals(LEFT_WIDTH) || controlPoint.getPurpose().equals(RIGHT_WIDTH)))
         {
             Box leg = legs.get(controlPoint.getLeg());
             LatLon[] legLocations = leg.getLocations();
 
             LatLon legCenter = LatLon.interpolateGreatCircle(0.5, legLocations[0], legLocations[1]);
-            Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(legCenter);
-            Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            Vec4 centerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(legCenter);
+            Vec4 markerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
                 new Position(controlPoint.getPosition(), 0));
             Vec4 vMarker = markerPoint.subtract3(centerPoint).normalize3();
 
             double[] widths = leg.getWidths();
             double[] newWidths = new double[] {widths[0], widths[1]};
-            Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
+            Vec4 delta = this.computeControlPointDelta(this.getPreviousPosition(), terrainPosition);
             if (controlPoint.getPurpose().equals(LEFT_WIDTH))
                 newWidths[0] += delta.dot3(vMarker);
             else
@@ -1755,32 +2270,141 @@ public class ShapeEditor implements SelectListener
             if (newWidths[0] >= 0 && newWidths[1] >= 0)
             {
                 leg.setWidths(newWidths[0], newWidths[1]);
+            }
 
-                for (int i = controlPoint.getLeg() + 1; i < legs.size(); i++)
+            track.setLegs(new ArrayList<Box>(track.getLegs()));
+        }
+        else if (controlPoint != null)
+        {
+            // Make a modifiable copy of the legs list.
+            legs = new ArrayList<Box>(legs);
+
+            if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.ALT_DOWN_MASK) != 0)
+            {
+                // Remove a control point.
+
+                if (legs.size() < 2) // Can't remove a control point from a single-leg track.
+                    return;
+
+                if (controlPoint.getLeg() == 0 && controlPoint.getId() == 0)
                 {
-                    if (this.trackAdjacencyList.contains(legs.get(i)))
-                        legs.get(i).setWidths(newWidths[0], newWidths[1]);
-                    else
-                        break;
+                    legs.remove(0);
                 }
+                else if (controlPoint.getLeg() == legs.size() - 1 && controlPoint.getId() == 1)
+                {
+                    legs.remove(legs.size() - 1);
+                }
+                else
+                {
+                    if (controlPoint.getLeg() == 0) // need to treat the second control point of leg 0 specially
+                    {
+                        legs.get(0).setLocations(legs.get(0).getLocations()[0], legs.get(1).getLocations()[1]);
+                        legs.remove(1);
+                    }
+                    else // remove an internal control point
+                    {
+                        Box leftLeg = controlPoint.getLeg() == 0 ? legs.get(0) : legs.get(controlPoint.getLeg() - 1);
+                        Box rightLeg = legs.get(controlPoint.getLeg() + 1);
+                        rightLeg.setLocations(leftLeg.getLocations()[1], rightLeg.getLocations()[1]);
+                        legs.remove(controlPoint.getLeg());
+                    }
+                }
+
+                track.setLegs(legs);
+                this.determineTrackAdjacency();
+                this.getControlPointLayer().setMarkers(null);
+            }
+            else if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) != 0)
+            {
+                // Append a location to the beginning or end of the track.
+
+                Globe globe = this.getWwd().getModel().getGlobe();
+
+                if (controlPoint.getLeg() == 0 && controlPoint.getId() == 0) // first control point
+                {
+                    Vec4 pointA = globe.computeEllipsoidalPointFromLocation(legs.get(0).getLocations()[0]);
+                    Vec4 pointB = globe.computeEllipsoidalPointFromLocation(legs.get(0).getLocations()[1]);
+                    Vec4 newPoint = pointA.add3(pointA.subtract3(pointB).multiply3(0.1));
+                    LatLon newLocation = globe.computePositionFromEllipsoidalPoint(newPoint);
+
+                    Box newLeg = new Box(legs.get(0));
+                    newLeg.setLocations(newLocation, legs.get(0).getLocations()[0]);
+                    legs.add(0, newLeg);
+                }
+                else if (controlPoint.getLeg() == legs.size() - 1 && controlPoint.getId() == 1) // last control point
+                {
+                    Box lastLeg = legs.get(legs.size() - 1);
+                    Vec4 pointA = globe.computeEllipsoidalPointFromLocation(lastLeg.getLocations()[1]);
+                    Vec4 pointB = globe.computeEllipsoidalPointFromLocation(lastLeg.getLocations()[0]);
+                    Vec4 newPoint = pointA.add3(pointA.subtract3(pointB).multiply3(0.1));
+                    LatLon newLocation = globe.computePositionFromEllipsoidalPoint(newPoint);
+
+                    Box newLeg = new Box(lastLeg);
+                    newLeg.setLocations(lastLeg.getLocations()[1], newLocation);
+                    legs.add(newLeg);
+                }
+                else
+                {
+                    return; // the point is internal rather than at the end
+                }
+
+                track.setLegs(legs);
+                this.determineTrackAdjacency();
+                this.getControlPointLayer().setMarkers(null);
+            }
+            else // control point location change
+            {
+                Vec4 delta = this.computeControlPointDelta(this.getPreviousPosition(), terrainPosition);
+                Vec4 markerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+                    new Position(controlPoint.getPosition(), 0));
+                Position markerPosition = this.getWwd().getModel().getGlobe().computePositionFromEllipsoidalPoint(
+                    markerPoint.add3(delta));
+
+                Box leg = track.getLegs().get(controlPoint.getLeg());
+                if (controlPoint.getId() == 0)
+                    leg.setLocations(markerPosition, leg.getLocations()[1]);
+                else
+                    leg.setLocations(leg.getLocations()[0], markerPosition);
+
+                track.setLegs(new ArrayList<Box>(track.getLegs()));
             }
         }
-        else
+        else if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) != 0)
         {
-            Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
-            Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(
-                new Position(controlPoint.getPosition(), 0));
-            Position markerPosition = wwd.getModel().getGlobe().computePositionFromEllipsoidalPoint(
-                markerPoint.add3(delta));
+            // Make a modifiable copy of the legs list.
+            legs = new ArrayList<Box>(legs);
 
-            Box leg = track.getLegs().get(controlPoint.getLeg());
-            if (controlPoint.getId() == 0)
-                leg.setLocations(markerPosition, leg.getLocations()[1]);
+            List<LatLon> locations = new ArrayList<LatLon>();
+            for (Box leg : legs)
+            {
+                locations.add(leg.getLocations()[0]);
+            }
+            locations.add(legs.get(legs.size() - 1).getLocations()[1]); // add the last point of the last leg.
+
+            int segmentIndex = this.addNearestLocation(terrainPosition, track.getAltitudes()[1], locations);
+            LatLon newLocation = locations.get(segmentIndex);
+
+            int legIndex = segmentIndex - 1;
+            Box leg = legs.get(legIndex);
+            Box newLeg = new Box(leg);
+
+            if (legIndex > 0)
+            {
+                newLeg.setLocations(leg.getLocations()[0], newLocation);
+                leg.setLocations(newLocation, leg.getLocations()[1]);
+                legs.add(legIndex, newLeg);
+            }
             else
-                leg.setLocations(leg.getLocations()[0], markerPosition);
-        }
+            {
+                newLeg.setLocations(newLocation, leg.getLocations()[1]);
+                leg.setLocations(leg.getLocations()[0], newLocation);
+                legs.add(1, newLeg);
+            }
 
-        track.setLegs(new ArrayList<Box>(track.getLegs()));
+            track.setLegs(new ArrayList<Box>(legs));
+            this.determineTrackAdjacency();
+            this.getControlPointLayer().setMarkers(null);
+        }
     }
 
     /**
@@ -1788,7 +2412,7 @@ public class ShapeEditor implements SelectListener
      */
     protected void updateTrackControlPoints()
     {
-        TrackAirspace track = (TrackAirspace) this.shape;
+        TrackAirspace track = (TrackAirspace) this.getShape();
 
         List<Box> legs = track.getLegs();
         if (legs == null)
@@ -1796,7 +2420,7 @@ public class ShapeEditor implements SelectListener
 
         // Update the location control points.
         ArrayList<Marker> controlPoints = new ArrayList<Marker>();
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         Iterator<Marker> markerIterator = markers != null ? markers.iterator() : null;
         for (int i = 0; i < legs.size(); i++)
         {
@@ -1809,26 +2433,26 @@ public class ShapeEditor implements SelectListener
             {
                 if (!this.trackAdjacencyList.contains(leg))
                 {
-                    altitude = this.computeControlPointAltitude(legLocations[0]);
-                    ControlPointMarker cp = new ControlPointMarker(new Position(legLocations[0], altitude),
-                        this.locationMarkerAttributes, 0, i, LOCATION);
+                    altitude = this.getControlPointAltitude(legLocations[0]);
+                    ControlPointMarker cp = this.makeControlPoint(new Position(legLocations[0], altitude),
+                        this.getLocationControlPointAttributes(), 0, i, LOCATION);
                     controlPoints.add(cp);
                 }
 
-                altitude = this.computeControlPointAltitude(legLocations[1]);
-                ControlPointMarker cp = new ControlPointMarker(new Position(legLocations[1], altitude),
-                    this.locationMarkerAttributes, 1, i, LOCATION);
+                altitude = this.getControlPointAltitude(legLocations[1]);
+                ControlPointMarker cp = this.makeControlPoint(new Position(legLocations[1], altitude),
+                    this.getLocationControlPointAttributes(), 1, i, LOCATION);
                 controlPoints.add(cp);
             }
             else
             {
                 if (!this.trackAdjacencyList.contains(leg))
                 {
-                    altitude = this.computeControlPointAltitude(legLocations[0]);
+                    altitude = this.getControlPointAltitude(legLocations[0]);
                     markerIterator.next().setPosition(new Position(legLocations[0], altitude));
                 }
 
-                altitude = this.computeControlPointAltitude(legLocations[1]);
+                altitude = this.getControlPointAltitude(legLocations[1]);
                 markerIterator.next().setPosition(new Position(legLocations[1], altitude));
             }
         }
@@ -1837,28 +2461,27 @@ public class ShapeEditor implements SelectListener
         for (int i = 0; i < legs.size(); i++)
         {
             Box leg = legs.get(i);
-            if (!this.trackAdjacencyList.contains(leg))
+            LatLon[] legLocations = leg.getLocations();
+            double[] widths = leg.getWidths();
+
+            LatLon legCenter = LatLon.interpolateGreatCircle(0.5, legLocations[0], legLocations[1]);
+            Position cwLPosition = this.computeEdgeLocation(legCenter, legLocations[1], widths[0]);
+            Position cwRPosition = this.computeEdgeLocation(legCenter, legLocations[0], widths[1]);
+
+            if (markers == null)
             {
-                LatLon[] legLocations = leg.getLocations();
-                double[] widths = leg.getWidths();
-
-                LatLon legCenter = LatLon.interpolateGreatCircle(0.5, legLocations[0], legLocations[1]);
-                Position cwLPosition = this.computeEdgeLocation(legCenter, legLocations[1], widths[0]);
-                Position cwRPosition = this.computeEdgeLocation(legCenter, legLocations[0], widths[1]);
-
-                if (markers == null)
-                {
-                    Position cpPosition = new Position(cwLPosition, cwLPosition.getAltitude());
-                    controlPoints.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 2, i, LEFT_WIDTH));
-                    cpPosition = new Position(cwRPosition, cwRPosition.getAltitude());
-                    controlPoints.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 3, i, RIGHT_WIDTH));
-                }
-                else
-                {
-                    //noinspection ConstantConditions
-                    markerIterator.next().setPosition(new Position(cwLPosition, cwLPosition.getAltitude()));
-                    markerIterator.next().setPosition(new Position(cwRPosition, cwRPosition.getAltitude()));
-                }
+                Position cpPosition = new Position(cwLPosition, cwLPosition.getAltitude());
+                controlPoints.add(
+                    this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 2, i, LEFT_WIDTH));
+                cpPosition = new Position(cwRPosition, cwRPosition.getAltitude());
+                controlPoints.add(
+                    this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 3, i, RIGHT_WIDTH));
+            }
+            else
+            {
+                //noinspection ConstantConditions
+                markerIterator.next().setPosition(new Position(cwLPosition, cwLPosition.getAltitude()));
+                markerIterator.next().setPosition(new Position(cwRPosition, cwRPosition.getAltitude()));
             }
         }
 
@@ -1869,16 +2492,22 @@ public class ShapeEditor implements SelectListener
             trackLocations.add(leg.getLocations()[0]);
             trackLocations.add(leg.getLocations()[1]);
         }
-        LatLon trackCenter = LatLon.getCenter(trackLocations);
-        double trackCenterAltitude = this.computeControlPointAltitude(trackCenter);
-        Angle trackRadius = LatLon.getAverageDistance(trackLocations);
 
-        LatLon rotationLocation = LatLon.greatCircleEndPosition(trackCenter, this.currentHeading, trackRadius);
-        double rotationAltitude = this.computeControlPointAltitude(rotationLocation);
+        Globe globe = this.getWwd().getModel().getGlobe();
+        LatLon trackCenter = LatLon.getCenter(globe, trackLocations);
+        double trackCenterAltitude = this.getControlPointAltitude(trackCenter);
+        Angle trackRadius = LatLon.getAverageDistance(globe, trackCenter, trackLocations);
+        double[] widths = legs.get(0).getWidths();
+        trackRadius = trackRadius.addRadians((widths[0] + widths[1]) / globe.getEquatorialRadius());
+
+        Angle heading = this.getCurrentHeading();
+        LatLon rotationLocation = LatLon.greatCircleEndPosition(trackCenter, heading, trackRadius);
+        double rotationAltitude = this.getControlPointAltitude(rotationLocation);
+
         if (markers == null)
         {
             Position cpPosition = new Position(rotationLocation, rotationAltitude);
-            controlPoints.add(new ControlPointMarker(cpPosition, this.angleMarkerAttributes, 4, ROTATION));
+            controlPoints.add(this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), 4, ROTATION));
         }
         else
         {
@@ -1887,12 +2516,12 @@ public class ShapeEditor implements SelectListener
         }
 
         if (markers == null)
-            this.controlPointLayer.setMarkers(controlPoints);
+            this.getControlPointLayer().setMarkers(controlPoints);
 
         this.updateOrientationLine(new Position(trackCenter, trackCenterAltitude),
             new Position(rotationLocation, rotationAltitude));
 
-        markers = this.controlPointLayer.getMarkers();
+        markers = this.getControlPointLayer().getMarkers();
         for (Marker marker : markers)
         {
             ControlPointMarker cp = (ControlPointMarker) marker;
@@ -1902,16 +2531,14 @@ public class ShapeEditor implements SelectListener
             else if (cp.getId() == 3)
                 cp.size = legs.get(cp.getLeg()).getWidths()[1];
             else if (cp.getId() == 4)
-            {
-                cp.rotation = this.currentHeading;
-            }
+                cp.rotation = heading;
         }
     }
 
     protected void reshapeSurfacePolygon(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        Iterable<? extends LatLon> corners = this.shape instanceof SurfacePolygon
-            ? ((SurfacePolygon) this.shape).getLocations() : ((SurfacePolyline) this.shape).getLocations();
+        Iterable<? extends LatLon> corners = this.getShape() instanceof SurfacePolygon
+            ? ((SurfacePolygon) this.getShape()).getLocations() : ((SurfacePolyline) this.getShape()).getLocations();
 
         java.util.List<LatLon> locations = new ArrayList<LatLon>();
         for (LatLon ll : corners)
@@ -1919,58 +2546,75 @@ public class ShapeEditor implements SelectListener
             locations.add(ll);
         }
 
-        if (controlPoint.getPurpose().equals(ROTATION))
+        if (controlPoint != null && controlPoint.getPurpose().equals(ROTATION))
         {
             // Rotate the polygon.
-            LatLon center = LatLon.getCenter(locations); // rotation axis
-            Angle oldHeading = LatLon.greatCircleAzimuth(center, this.previousPosition);
-            Angle deltaHeading = LatLon.greatCircleAzimuth(center, terrainPosition).subtract(oldHeading);
-            this.currentHeading = this.normalizedHeading(this.currentHeading, deltaHeading);
-
-            // Rotate the polygon's locations by the heading delta angle.
-            for (int i = 0; i < locations.size(); i++)
+            this.rotateLocations(terrainPosition, locations);
+        }
+        else if (controlPoint != null) // control point location change or add/delete a control point
+        {
+            if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.ALT_DOWN_MASK) != 0)
             {
-                LatLon location = locations.get(i);
-
-                Angle heading = LatLon.greatCircleAzimuth(center, location);
-                Angle distance = LatLon.greatCircleDistance(center, location);
-                LatLon newLocation = LatLon.greatCircleEndPosition(center, heading.add(deltaHeading), distance);
-                locations.set(i, newLocation);
+                int minSize = this.getShape() instanceof SurfacePolygon ? 3 : 2;
+                if (locations.size() > minSize)
+                {
+                    // Delete the control point.
+                    locations.remove(controlPoint.getId());
+                    this.getControlPointLayer().setMarkers(null);
+                }
+            }
+            else if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) != 0
+                && this.getShape() instanceof SurfacePolyline)
+            {
+                this.appendLocation(controlPoint, locations);
+                this.getControlPointLayer().setMarkers(null);
+            }
+            else // location change
+            {
+                this.moveLocation(controlPoint, terrainPosition, locations);
             }
         }
-        else
+        else if ((this.getCurrentEvent().getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) != 0)
         {
-            Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
-            Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(controlPoint.getPosition());
-            Position markerPosition = wwd.getModel().getGlobe().computePositionFromEllipsoidalPoint(
-                markerPoint.add3(delta));
-            locations.set(controlPoint.getId(), markerPosition);
+            this.addNearestLocation(terrainPosition, 0, locations);
         }
 
-        if (this.shape instanceof SurfacePolygon)
-            ((SurfacePolygon) this.shape).setLocations(locations);
+        if (this.getShape() instanceof SurfacePolygon)
+            ((SurfacePolygon) this.getShape()).setLocations(locations);
         else
-            ((SurfacePolyline) this.shape).setLocations(locations);
+            ((SurfacePolyline) this.getShape()).setLocations(locations);
     }
 
     protected void updateSurfacePolygonControlPoints()
     {
-        Iterable<? extends LatLon> locations = null;
+        Iterable<? extends LatLon> locationsIterable = null;
 
-        if (this.shape instanceof SurfacePolygon)
-            locations = ((SurfacePolygon) this.shape).getLocations();
-        else if (this.shape instanceof SurfacePolyline)
-            locations = ((SurfacePolyline) this.shape).getLocations();
+        if (this.getShape() instanceof SurfacePolygon)
+            locationsIterable = ((SurfacePolygon) this.getShape()).getLocations();
+        else if (this.getShape() instanceof SurfacePolyline)
+            locationsIterable = ((SurfacePolyline) this.getShape()).getLocations();
 
-        if (locations == null)
+        if (locationsIterable == null)
             return;
 
-        LatLon polygonCenter = LatLon.getCenter(locations);
-        Angle shapeRadius = LatLon.getAverageDistance(locations);
-        Angle heading = this.currentHeading;
+        java.util.List<LatLon> locations = new ArrayList<LatLon>();
+        for (LatLon location : locationsIterable)
+        {
+            locations.add(location);
+        }
+
+        if (locations.size() < 2)
+            return;
+
+        Globe globe = this.getWwd().getModel().getGlobe();
+
+        LatLon polygonCenter = LatLon.getCenter(globe, locations);
+        Angle shapeRadius = LatLon.getAverageDistance(globe, polygonCenter, locations);
+        shapeRadius = shapeRadius.multiply(1.2);
+        Angle heading = this.getCurrentHeading();
         LatLon rotationControlLocation = LatLon.greatCircleEndPosition(polygonCenter, heading, shapeRadius);
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             ArrayList<Marker> controlPoints = new ArrayList<Marker>();
@@ -1978,14 +2622,15 @@ public class ShapeEditor implements SelectListener
             for (LatLon corner : locations)
             {
                 Position cpPosition = new Position(corner, 0);
-                controlPoints.add(new ControlPointMarker(cpPosition, this.locationMarkerAttributes, i++, LOCATION));
+                controlPoints.add(
+                    this.makeControlPoint(cpPosition, this.getLocationControlPointAttributes(), i++, LOCATION));
             }
 
             // Create a control point for the rotation control.
             Position cpPosition = new Position(rotationControlLocation, 0);
-            controlPoints.add(new ControlPointMarker(cpPosition, this.angleMarkerAttributes, i, ROTATION));
+            controlPoints.add(this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), i, ROTATION));
 
-            this.controlPointLayer.setMarkers(controlPoints);
+            this.getControlPointLayer().setMarkers(controlPoints);
         }
         else
         {
@@ -2000,7 +2645,7 @@ public class ShapeEditor implements SelectListener
         }
 
         // Update the heading annotation.
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         for (LatLon ignored : locations)
         {
             markerIterator.next();
@@ -2014,12 +2659,16 @@ public class ShapeEditor implements SelectListener
 
     protected void reshapeSurfaceCircle(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        SurfaceCircle circle = (SurfaceCircle) this.shape;
+        if (controlPoint == null)
+            return; // Cannot add locations to this shape.
 
-        Vec4 delta = this.computeControlPointDelta(this.previousPosition, terrainPosition);
+        SurfaceCircle circle = (SurfaceCircle) this.getShape();
 
-        Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(circle.getCenter());
-        Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(controlPoint.getPosition());
+        Vec4 delta = this.computeControlPointDelta(this.getPreviousPosition(), terrainPosition);
+
+        Vec4 centerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(circle.getCenter());
+        Vec4 markerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            controlPoint.getPosition());
         Vec4 vMarker = markerPoint.subtract3(centerPoint).normalize3();
 
         double radius = circle.getRadius() + delta.dot3(vMarker);
@@ -2029,38 +2678,43 @@ public class ShapeEditor implements SelectListener
 
     protected void updateSurfaceCircleControlPoints()
     {
-        SurfaceCircle circle = (SurfaceCircle) this.shape;
+        SurfaceCircle circle = (SurfaceCircle) this.getShape();
 
         LatLon radiusLocation = LatLon.greatCircleEndPosition(circle.getCenter(), Angle.fromDegrees(90),
-            Angle.fromRadians(circle.getRadius() / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(circle.getRadius() / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             java.util.List<Marker> markerList = new ArrayList<Marker>(1);
             Position cpPosition = new Position(radiusLocation, 0);
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 0, OUTER_RADIUS));
-            this.controlPointLayer.setMarkers(markerList);
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 0, OUTER_RADIUS));
+            this.getControlPointLayer().setMarkers(markerList);
         }
         else
         {
             markers.iterator().next().setPosition(new Position(radiusLocation, 0));
         }
 
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         ((ControlPointMarker) markerIterator.next()).size = circle.getRadius();
     }
 
     protected void reshapeSurfaceSquare(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        SurfaceSquare square = (SurfaceSquare) this.shape;
+        if (controlPoint == null)
+            return; // Cannot add locations to this shape.
 
-        Vec4 terrainPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(terrainPosition);
-        Vec4 previousPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(this.previousPosition);
+        SurfaceSquare square = (SurfaceSquare) this.getShape();
+
+        Vec4 terrainPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(terrainPosition);
+        Vec4 previousPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            this.getPreviousPosition());
         Vec4 delta = terrainPoint.subtract3(previousPoint);
 
-        Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(square.getCenter());
-        Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(controlPoint.getPosition());
+        Vec4 centerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(square.getCenter());
+        Vec4 markerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            controlPoint.getPosition());
         Vec4 vMarker = markerPoint.subtract3(centerPoint);
 
         if (controlPoint.getPurpose().equals(RIGHT_WIDTH))
@@ -2071,34 +2725,35 @@ public class ShapeEditor implements SelectListener
         }
         else // rotation
         {
-            Angle deltaAngle = this.computeHeadingDelta(centerPoint, previousPoint, terrainPoint, delta);
-            square.setHeading(this.normalizedHeading(square.getHeading(), deltaAngle));
+            Angle oldHeading = LatLon.greatCircleAzimuth(square.getCenter(), this.getPreviousPosition());
+            Angle deltaHeading = LatLon.greatCircleAzimuth(square.getCenter(), terrainPosition).subtract(oldHeading);
+            square.setHeading(this.normalizedHeading(square.getHeading(), deltaHeading));
         }
     }
 
     protected void updateSurfaceSquareControlPoints()
     {
-        SurfaceSquare square = (SurfaceSquare) this.shape;
+        SurfaceSquare square = (SurfaceSquare) this.getShape();
 
         LatLon sizeLocation = LatLon.greatCircleEndPosition(square.getCenter(),
             Angle.fromDegrees(90 + square.getHeading().degrees),
-            Angle.fromRadians(0.5 * square.getSize() / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(0.5 * square.getSize() / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
         LatLon rotationLocation = LatLon.greatCircleEndPosition(square.getCenter(),
             Angle.fromDegrees(square.getHeading().degrees),
-            Angle.fromRadians(0.7 * square.getSize() / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(0.7 * square.getSize() / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             java.util.List<Marker> markerList = new ArrayList<Marker>(1);
             Position cpPosition = new Position(sizeLocation, 0);
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 0, RIGHT_WIDTH));
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 0, RIGHT_WIDTH));
 
             cpPosition = new Position(rotationLocation, 0);
-            markerList.add(new ControlPointMarker(cpPosition, this.angleMarkerAttributes, 1, ROTATION));
+            markerList.add(this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), 1, ROTATION));
 
-            this.controlPointLayer.setMarkers(markerList);
+            this.getControlPointLayer().setMarkers(markerList);
         }
         else
         {
@@ -2107,7 +2762,7 @@ public class ShapeEditor implements SelectListener
             markerIterator.next().setPosition(new Position(rotationLocation, 0));
         }
 
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         ((ControlPointMarker) markerIterator.next()).size = square.getSize();
         ((ControlPointMarker) markerIterator.next()).rotation = square.getHeading();
 
@@ -2116,14 +2771,19 @@ public class ShapeEditor implements SelectListener
 
     protected void reshapeSurfaceQuad(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        SurfaceQuad quad = (SurfaceQuad) this.shape;
+        if (controlPoint == null)
+            return; // Cannot add locations to this shape.
 
-        Vec4 terrainPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(terrainPosition);
-        Vec4 previousPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(this.previousPosition);
+        SurfaceQuad quad = (SurfaceQuad) this.getShape();
+
+        Vec4 terrainPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(terrainPosition);
+        Vec4 previousPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            this.getPreviousPosition());
         Vec4 delta = terrainPoint.subtract3(previousPoint);
 
-        Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(quad.getCenter());
-        Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(controlPoint.getPosition());
+        Vec4 centerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(quad.getCenter());
+        Vec4 markerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            controlPoint.getPosition());
         Vec4 vMarker = markerPoint.subtract3(centerPoint).normalize3();
 
         if (controlPoint.getPurpose().equals(WIDTH) || controlPoint.getPurpose().equals(HEIGHT))
@@ -2135,40 +2795,41 @@ public class ShapeEditor implements SelectListener
         }
         else
         {
-            Angle deltaAngle = this.computeHeadingDelta(centerPoint, previousPoint, terrainPoint, delta);
-            quad.setHeading(this.normalizedHeading(quad.getHeading(), deltaAngle));
+            Angle oldHeading = LatLon.greatCircleAzimuth(quad.getCenter(), this.getPreviousPosition());
+            Angle deltaHeading = LatLon.greatCircleAzimuth(quad.getCenter(), terrainPosition).subtract(oldHeading);
+            quad.setHeading(this.normalizedHeading(quad.getHeading(), deltaHeading));
         }
     }
 
     protected void updateSurfaceQuadControlPoints()
     {
-        SurfaceQuad quad = (SurfaceQuad) this.shape;
+        SurfaceQuad quad = (SurfaceQuad) this.getShape();
 
         LatLon widthLocation = LatLon.greatCircleEndPosition(quad.getCenter(),
             Angle.fromDegrees(90 + quad.getHeading().degrees),
-            Angle.fromRadians(0.5 * quad.getWidth() / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(0.5 * quad.getWidth() / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
         LatLon heightLocation = LatLon.greatCircleEndPosition(quad.getCenter(),
             Angle.fromDegrees(quad.getHeading().degrees),
-            Angle.fromRadians(0.5 * quad.getHeight() / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(0.5 * quad.getHeight() / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
         LatLon rotationLocation = LatLon.greatCircleEndPosition(quad.getCenter(),
             Angle.fromDegrees(quad.getHeading().degrees),
-            Angle.fromRadians(0.7 * quad.getHeight() / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(0.7 * quad.getHeight() / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             java.util.List<Marker> markerList = new ArrayList<Marker>(2);
             Position cpPosition = new Position(widthLocation, 0);
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 0, WIDTH));
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 0, WIDTH));
             cpPosition = new Position(heightLocation, 0);
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 1, HEIGHT));
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 1, HEIGHT));
 
             cpPosition = new Position(rotationLocation, 0);
-            markerList.add(new ControlPointMarker(cpPosition, this.angleMarkerAttributes, 2, ROTATION));
+            markerList.add(this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), 2, ROTATION));
 
-            this.controlPointLayer.setMarkers(markerList);
+            this.getControlPointLayer().setMarkers(markerList);
         }
         else
         {
@@ -2178,7 +2839,7 @@ public class ShapeEditor implements SelectListener
             markerIterator.next().setPosition(new Position(rotationLocation, 0));
         }
 
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         ((ControlPointMarker) markerIterator.next()).size = quad.getWidth();
         ((ControlPointMarker) markerIterator.next()).size = quad.getHeight();
         ((ControlPointMarker) markerIterator.next()).rotation = quad.getHeading();
@@ -2188,14 +2849,19 @@ public class ShapeEditor implements SelectListener
 
     protected void reshapeSurfaceEllipse(Position terrainPosition, ControlPointMarker controlPoint)
     {
-        SurfaceEllipse ellipse = (SurfaceEllipse) this.shape;
+        if (controlPoint == null)
+            return; // Cannot add locations to this shape.
 
-        Vec4 terrainPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(terrainPosition);
-        Vec4 previousPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(this.previousPosition);
+        SurfaceEllipse ellipse = (SurfaceEllipse) this.getShape();
+
+        Vec4 terrainPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(terrainPosition);
+        Vec4 previousPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            this.getPreviousPosition());
         Vec4 delta = terrainPoint.subtract3(previousPoint);
 
-        Vec4 centerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(ellipse.getCenter());
-        Vec4 markerPoint = wwd.getModel().getGlobe().computeEllipsoidalPointFromLocation(controlPoint.getPosition());
+        Vec4 centerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(ellipse.getCenter());
+        Vec4 markerPoint = this.getWwd().getModel().getGlobe().computeEllipsoidalPointFromLocation(
+            controlPoint.getPosition());
         Vec4 vMarker = markerPoint.subtract3(centerPoint).normalize3();
 
         if (controlPoint.getPurpose().equals(WIDTH) || controlPoint.getPurpose().equals(HEIGHT))
@@ -2207,8 +2873,9 @@ public class ShapeEditor implements SelectListener
         }
         else
         {
-            Angle deltaAngle = this.computeHeadingDelta(centerPoint, previousPoint, terrainPoint, delta);
-            ellipse.setHeading(this.normalizedHeading(ellipse.getHeading(), deltaAngle));
+            Angle oldHeading = LatLon.greatCircleAzimuth(ellipse.getCenter(), this.getPreviousPosition());
+            Angle deltaHeading = LatLon.greatCircleAzimuth(ellipse.getCenter(), terrainPosition).subtract(oldHeading);
+            ellipse.setHeading(this.normalizedHeading(ellipse.getHeading(), deltaHeading));
         }
 
         this.updateAnnotation(controlPoint);
@@ -2216,34 +2883,35 @@ public class ShapeEditor implements SelectListener
 
     protected void updateSurfaceEllipseControlPoints()
     {
-        SurfaceEllipse ellipse = (SurfaceEllipse) this.shape;
+        SurfaceEllipse ellipse = (SurfaceEllipse) this.getShape();
 
         LatLon majorLocation = LatLon.greatCircleEndPosition(ellipse.getCenter(),
             Angle.fromDegrees(90 + ellipse.getHeading().degrees),
-            Angle.fromRadians(ellipse.getMajorRadius() / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(ellipse.getMajorRadius() / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
         LatLon minorLocation = LatLon.greatCircleEndPosition(ellipse.getCenter(),
             Angle.fromDegrees(ellipse.getHeading().degrees),
-            Angle.fromRadians(ellipse.getMinorRadius() / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(ellipse.getMinorRadius() / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
         LatLon rotationLocation = LatLon.greatCircleEndPosition(ellipse.getCenter(),
             Angle.fromDegrees(ellipse.getHeading().degrees),
-            Angle.fromRadians(1.15 * ellipse.getMinorRadius() / this.wwd.getModel().getGlobe().getEquatorialRadius()));
+            Angle.fromRadians(
+                1.15 * ellipse.getMinorRadius() / this.getWwd().getModel().getGlobe().getEquatorialRadius()));
 
-        Iterable<Marker> markers = this.controlPointLayer.getMarkers();
+        Iterable<Marker> markers = this.getControlPointLayer().getMarkers();
         if (markers == null)
         {
             java.util.List<Marker> markerList = new ArrayList<Marker>(2);
             Position cpPosition = new Position(majorLocation, 0);
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 0, WIDTH));
-            this.controlPointLayer.setMarkers(markerList);
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 0, WIDTH));
+            this.getControlPointLayer().setMarkers(markerList);
             cpPosition = new Position(minorLocation, 0);
-            markerList.add(new ControlPointMarker(cpPosition, this.sizeMarkerAttributes, 1, HEIGHT));
+            markerList.add(this.makeControlPoint(cpPosition, this.getSizeControlPointAttributes(), 1, HEIGHT));
 
             cpPosition = new Position(rotationLocation, 0);
-            markerList.add(new ControlPointMarker(cpPosition, this.angleMarkerAttributes, 2, ROTATION));
+            markerList.add(this.makeControlPoint(cpPosition, this.getAngleControlPointAttributes(), 2, ROTATION));
 
-            this.controlPointLayer.setMarkers(markerList);
+            this.getControlPointLayer().setMarkers(markerList);
         }
         else
         {
@@ -2253,7 +2921,7 @@ public class ShapeEditor implements SelectListener
             markerIterator.next().setPosition(new Position(rotationLocation, 0));
         }
 
-        Iterator<Marker> markerIterator = this.controlPointLayer.getMarkers().iterator();
+        Iterator<Marker> markerIterator = this.getControlPointLayer().getMarkers().iterator();
         ((ControlPointMarker) markerIterator.next()).size = ellipse.getMajorRadius();
         ((ControlPointMarker) markerIterator.next()).size = ellipse.getMinorRadius();
         ((ControlPointMarker) markerIterator.next()).rotation = ellipse.getHeading();

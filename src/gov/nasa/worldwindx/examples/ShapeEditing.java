@@ -19,6 +19,7 @@ import gov.nasa.worldwind.render.markers.*;
 import gov.nasa.worldwind.util.ShapeEditor;
 
 import java.awt.*;
+import java.awt.event.*;
 import java.util.*;
 
 /**
@@ -46,6 +47,7 @@ public class ShapeEditing extends ApplicationTemplate
             attrs.setInteriorMaterial(new Material(Color.WHITE));
             attrs.setOutlineMaterial(new Material(Color.BLACK));
             attrs.setOutlineWidth(2);
+            attrs.setEnableAntialiasing(true);
 
             AirspaceAttributes highlightAttrs = new BasicAirspaceAttributes(attrs);
             highlightAttrs.setOutlineMaterial(new Material(Color.RED));
@@ -129,7 +131,7 @@ public class ShapeEditing extends ApplicationTemplate
             track.addLeg(LatLon.fromDegrees(40, -103), LatLon.fromDegrees(41, -103), 1e4, 2e4, 2e4, 2e4);
             track.addLeg(LatLon.fromDegrees(41, -103), LatLon.fromDegrees(41, -102), 1e4, 2e4, 2e4, 2e4);
             track.addLeg(LatLon.fromDegrees(41, -102), LatLon.fromDegrees(40, -102), 1e4, 2e4, 2e4, 2e4);
-            track.addLeg(LatLon.fromDegrees(39.5, -102), LatLon.fromDegrees(39.5, -103), 1e4, 2e4, 2e4, 2e4);
+//            track.addLeg(LatLon.fromDegrees(39.5, -102), LatLon.fromDegrees(39.5, -103), 1e4, 2e4, 2e4, 2e4);
             track.setAttributes(attrs);
             track.setHighlightAttributes(highlightAttrs);
             track.setAltitudeDatum(AVKey.ABOVE_GROUND_LEVEL, AVKey.ABOVE_GROUND_LEVEL);
@@ -206,6 +208,8 @@ public class ShapeEditing extends ApplicationTemplate
         @Override
         public void selected(SelectEvent event)
         {
+            // This select method identifies the shape to edit.
+
             PickedObject topObject = event.getTopPickedObject();
 
             if (event.getEventAction().equals(SelectEvent.LEFT_CLICK))
@@ -230,9 +234,11 @@ public class ShapeEditing extends ApplicationTemplate
                         this.keepShapeHighlighted(true);
                         event.consume();
                     }
-                    else
+                    else if ((event.getMouseEvent().getModifiersEx() & MouseEvent.SHIFT_DOWN_MASK) == 0
+                        && (event.getMouseEvent().getModifiersEx() & MouseEvent.ALT_DOWN_MASK) == 0)
                     {
-                        // Disable editing of the current shape.
+                        // Disable editing of the current shape. Shift and Alt are used by the editor, so ignore
+                        // events with those buttons down.
                         this.editor.setArmed(false);
                         this.keepShapeHighlighted(false);
                         this.editor = null;
@@ -246,18 +252,19 @@ public class ShapeEditing extends ApplicationTemplate
         {
             if (tf)
             {
-                this.lastAttrs = this.editor.getShapeAttributes();
-                this.editor.setShapeAttributes(this.editor.getShapeHighlightAttributes());
+                this.lastAttrs = ((Attributable)this.editor.getShape()).getAttributes();
+                ((Attributable) this.editor.getShape()).setAttributes(
+                    ((Attributable) this.editor.getShape()).getHighlightAttributes());
             }
             else
             {
-                this.editor.setShapeAttributes(this.lastAttrs);
+                ((Attributable)this.editor.getShape()).setAttributes(this.lastAttrs);
             }
         }
     }
 
     public static void main(String[] args)
     {
-        ApplicationTemplate.start("World Wind Airspace Editing", ShapeEditing.AppFrame.class);
+        ApplicationTemplate.start("World Wind Shape Editing", ShapeEditing.AppFrame.class);
     }
 }

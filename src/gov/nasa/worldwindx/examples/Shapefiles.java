@@ -5,8 +5,9 @@
  */
 package gov.nasa.worldwindx.examples;
 
+import gov.nasa.worldwind.WorldWind;
 import gov.nasa.worldwind.avlist.AVKey;
-import gov.nasa.worldwind.formats.shapefile.ShapefileLayerFactory;
+import gov.nasa.worldwind.formats.shapefile.*;
 import gov.nasa.worldwind.geom.Sector;
 import gov.nasa.worldwind.layers.*;
 import gov.nasa.worldwind.util.*;
@@ -28,7 +29,8 @@ import java.io.File;
  */
 public class Shapefiles extends ApplicationTemplate
 {
-    public static class AppFrame extends ApplicationTemplate.AppFrame implements Runnable
+    public static class AppFrame extends ApplicationTemplate.AppFrame
+        implements ShapefileLayerFactory.CompletionCallback
     {
         protected RandomShapeAttributes randomAttrs = new RandomShapeAttributes();
 
@@ -39,31 +41,50 @@ public class Shapefiles extends ApplicationTemplate
 
         public void loadShapefile(Object source)
         {
-            ShapefileLayerFactory factory = new ShapefileLayerFactory();
+            this.randomAttrs.nextAttributes(); // display each shapefile in different attributes
 
-            this.randomAttrs.nextAttributes();
+            ShapefileLayerFactory factory = (ShapefileLayerFactory) WorldWind.createConfigurationComponent(
+                AVKey.SHAPEFILE_LAYER_FACTORY);
             factory.setNormalPointAttributes(this.randomAttrs.asPointAttributes());
             factory.setNormalShapeAttributes(this.randomAttrs.asShapeAttributes());
-
-            Layer layer = factory.createLayerFromSource(source, this); // use this as the completion callback
-            layer.setName(WWIO.getFilename(source.toString()));
-            this.getWwd().getModel().getLayers().add(layer);
+            factory.createFromShapefileSource(source, this); // add the layer in the completion callback
 
             this.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
         }
 
         @Override
-        public void run() // ShapefileLayerFactory completion callback
+        public void completion(final Object result)
         {
-            LayerList layerList = this.getWwd().getModel().getLayers();
-            Layer lastLayer = layerList.get(layerList.size() - 1);
-            Sector sector = (Sector) lastLayer.getValue(AVKey.SECTOR);
+            if (!SwingUtilities.isEventDispatchThread())
+            {
+                SwingUtilities.invokeLater(new Runnable()
+                {
+                    @Override
+                    public void run()
+                    {
+                        completion(result);
+                    }
+                });
+                return;
+            }
+
+            Layer layer = (Layer) result;
+            layer.setName(WWIO.getFilename(layer.getName())); // convert the layer name to the source's filename
+            this.getWwd().getModel().getLayers().add(layer);
+
+            Sector sector = (Sector) layer.getValue(AVKey.SECTOR);
             if (sector != null)
             {
                 ExampleUtil.goTo(this.getWwd(), sector);
             }
 
             this.setCursor(null);
+        }
+
+        @Override
+        public void exception(Exception e)
+        {
+            Logging.logger().log(java.util.logging.Level.SEVERE, e.getMessage(), e);
         }
     }
 

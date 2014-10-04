@@ -36,7 +36,7 @@ import java.io.*;
  */
 public abstract class AbstractShape extends WWObjectImpl
     implements Highlightable, OrderedRenderable, Movable, Movable2, ExtentHolder, GeographicExtent, Exportable,
-    Restorable, PreRenderable
+    Restorable, PreRenderable, Attributable
 {
     /** The default interior color. */
     protected static final Material DEFAULT_INTERIOR_MATERIAL = Material.LIGHT_GRAY;
@@ -334,6 +334,24 @@ public abstract class AbstractShape extends WWObjectImpl
     /** Invokes {@link #initialize()} during construction and sets the data cache's expiration time to a default value. */
     protected AbstractShape()
     {
+        this.initialize();
+    }
+
+    protected AbstractShape(AbstractShape source)
+    {
+        this.normalAttrs = new BasicShapeAttributes(source.normalAttrs);
+        this.highlightAttrs = new BasicShapeAttributes(source.highlightAttrs);
+        this.highlighted = source.highlighted;
+        this.visible = source.visible;
+        this.altitudeMode = source.altitudeMode;
+        this.enableBatchRendering = source.enableBatchRendering;
+        this.enableBatchPicking = source.enableBatchPicking;
+        this.enableDepthOffset = source.enableDepthOffset;
+        this.outlinePickWidth = source.outlinePickWidth;
+        this.sector = source.sector;
+        this.referencePosition = source.referencePosition;
+        this.delegateOwner = source.delegateOwner;
+
         this.initialize();
     }
 
