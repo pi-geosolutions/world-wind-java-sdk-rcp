@@ -118,8 +118,10 @@ public class TrackAirspace extends AbstractAirspace
             throw new IllegalArgumentException(message);
         }
 
+        leg.setAlwaysOnTop(this.isAlwaysOnTop());
         leg.setForceCullFace(true);
         leg.setEnableCenterLine(this.enableCenterLine);
+        leg.setDrawSurfaceShape(this.drawSurfaceShape);
         this.legs.add(leg);
         this.invalidateAirspaceData();
         this.setLegsOutOfDate();
@@ -225,6 +227,28 @@ public class TrackAirspace extends AbstractAirspace
 
         this.invalidateAirspaceData();
         this.setLegsOutOfDate();
+    }
+
+    @Override
+    public void setAlwaysOnTop(boolean alwaysOnTop)
+    {
+        super.setAlwaysOnTop(alwaysOnTop);
+
+        for (Box l : this.getLegs())
+        {
+            l.setAlwaysOnTop(alwaysOnTop);
+        }
+    }
+
+    @Override
+    public void setDrawSurfaceShape(boolean drawSurfaceShape)
+    {
+        super.setDrawSurfaceShape(drawSurfaceShape);
+
+        for (Box l : this.getLegs())
+        {
+            l.setDrawSurfaceShape(drawSurfaceShape);
+        }
     }
 
     public boolean isAirspaceVisible(DrawContext dc)

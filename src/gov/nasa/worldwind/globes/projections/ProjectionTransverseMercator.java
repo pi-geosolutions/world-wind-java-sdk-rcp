@@ -15,21 +15,29 @@ import gov.nasa.worldwind.util.*;
  * Provides a Transverse Mercator ellipsoidal projection using the WGS84 ellipsoid. The projection's central meridian
  * may be specified and defaults to the Prime Meridian (0 longitude). By default, the projection computes values for 30
  * degrees either side of the central meridian. This may be changed via the {@link
- * #setWidth(gov.nasa.worldwind.geom.Angle)} method, but the projection may fail for widths larger than that.
+ * #setWidth(gov.nasa.worldwind.geom.Angle)} method, but the projection may fail for large widths.
+ * <p/>
+ * The projection limits are modified to reflect the central meridian and the width, however the projection limits are
+ * clamped to a minimum of -180 degrees and a maximum of +180 degrees. It's therefore not possible to display a band
+ * whose central meridian is plus or minus 180.
  *
  * @author tag
  * @version $Id$
  */
 public class ProjectionTransverseMercator extends AbstractGeographicProjection
 {
-    protected Angle width = Angle.fromDegrees(30);
-    protected Angle centralMeridian = Angle.ZERO;
-    protected Angle centralLatitude = Angle.ZERO;
+    protected static Angle DEFAULT_WIDTH = Angle.fromDegrees(30);
+    protected static Angle DEFAULT_CENTRAL_MERIDIAN = Angle.ZERO;
+    protected static Angle DEFAULT_CENTRAL_LATITUDE = Angle.ZERO;
+
+    protected Angle width = DEFAULT_WIDTH;
+    protected Angle centralMeridian = DEFAULT_CENTRAL_MERIDIAN;
+    protected Angle centralLatitude = DEFAULT_CENTRAL_LATITUDE;
 
     /** Creates a projection whose central meridian is the Prime Meridian and central latitude is 0. */
     public ProjectionTransverseMercator()
     {
-        super(Sector.FULL_SPHERE);
+        super(makeProjectionLimits(DEFAULT_CENTRAL_MERIDIAN, DEFAULT_WIDTH));
     }
 
     /**
@@ -39,7 +47,7 @@ public class ProjectionTransverseMercator extends AbstractGeographicProjection
      */
     public ProjectionTransverseMercator(Angle centralMeridian)
     {
-        super(Sector.FULL_SPHERE);
+        super(makeProjectionLimits(centralMeridian, DEFAULT_WIDTH));
 
         if (centralMeridian == null)
         {
@@ -55,11 +63,11 @@ public class ProjectionTransverseMercator extends AbstractGeographicProjection
      * Creates a projection with a specified central meridian and central latitude.
      *
      * @param centralMeridian The projection's central meridian.
-     * @param centralLatitude  The projection's central latitude.
+     * @param centralLatitude The projection's central latitude.
      */
     public ProjectionTransverseMercator(Angle centralMeridian, Angle centralLatitude)
     {
-        super(Sector.FULL_SPHERE);
+        super(makeProjectionLimits(centralMeridian, DEFAULT_WIDTH));
 
         if (centralMeridian == null)
         {
@@ -110,6 +118,7 @@ public class ProjectionTransverseMercator extends AbstractGeographicProjection
         }
 
         this.centralMeridian = centralMeridian;
+        this.setProjectionLimits(makeProjectionLimits(this.getCentralMeridian(), this.getWidth()));
     }
 
     /**
@@ -166,6 +175,20 @@ public class ProjectionTransverseMercator extends AbstractGeographicProjection
         }
 
         this.width = width;
+        this.setProjectionLimits(makeProjectionLimits(this.getCentralMeridian(), this.getWidth()));
+    }
+
+    protected static Sector makeProjectionLimits(Angle centralMeridian, Angle width)
+    {
+        double minLon = centralMeridian.degrees - width.degrees;
+        if (minLon < -180)
+            minLon = -180;
+
+        double maxLon = centralMeridian.degrees + width.degrees;
+        if (maxLon > 180)
+            maxLon = 180;
+
+        return Sector.fromDegrees(-90, 90, minLon, maxLon);
     }
 
     protected double getScale()

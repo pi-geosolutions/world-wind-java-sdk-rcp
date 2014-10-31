@@ -9,6 +9,7 @@ package gov.nasa.worldwind.render;
 import gov.nasa.worldwind.*;
 import gov.nasa.worldwind.avlist.AVKey;
 import gov.nasa.worldwind.geom.*;
+import gov.nasa.worldwind.globes.Globe2D;
 import gov.nasa.worldwind.layers.Layer;
 import gov.nasa.worldwind.ogc.kml.KMLConstants;
 import gov.nasa.worldwind.ogc.kml.impl.KMLExportUtil;
@@ -38,6 +39,9 @@ import static gov.nasa.worldwind.ogc.kml.impl.KMLExportUtil.kmlBoolean;
  * Point placemarks can participate in global text decluttering by setting their decluttering-enabled flag to {@code
  * true}. See {@link #setEnableDecluttering(boolean)}. The default for this flag is {@code false}. When participating in
  * decluttering, only the point placemark's label is considered when determining interference with other text.
+ * <p/>
+ * When the label of a point placemark is picked, the associated {@link gov.nasa.worldwind.pick.PickedObject} contains
+ * the key {@link AVKey#LABEL}
  *
  * @author tag
  * @version $Id$
@@ -52,6 +56,10 @@ public class PointPlacemark extends WWObjectImpl
         AVKey.FRACTION);
     /** The point size to use when none is specified. */
     protected static final Double DEFAULT_POINT_SIZE = 5d;
+    /**
+     * The address of the transparent image used when attributes.isDrawImage is false.
+     */
+    protected static final String TRANSPARENT_IMAGE_ADDRESS = "images/transparent2x2.png";
 
     /** The attributes used if attributes are not specified. */
     protected static final PointPlacemarkAttributes defaultAttributes = new PointPlacemarkAttributes();
@@ -71,6 +79,7 @@ public class PointPlacemark extends WWObjectImpl
         protected Vec4 terrainPoint; // point on the terrain extruded from the placemark position.
         protected Vec4 screenPoint; // the projection of the place-point in the viewport (on the screen)
         protected double eyeDistance; // used to order the placemark as an ordered renderable
+        protected Rectangle imageBounds;
 
         public PointPlacemark getPlacemark()
         {
@@ -131,6 +140,21 @@ public class PointPlacemark extends WWObjectImpl
         {
             return PointPlacemark.this.getLabelBounds(dc, this);
         }
+
+        public Rectangle getImageBounds()
+        {
+            return imageBounds;
+        }
+
+        public Vec4 getPlacePoint()
+        {
+            return placePoint;
+        }
+
+        public Vec4 getTerrainPoint()
+        {
+            return terrainPoint;
+        }
     }
 
     protected Position position;
@@ -152,6 +176,8 @@ public class PointPlacemark extends WWObjectImpl
     protected Object delegateOwner;
     protected boolean clipToHorizon = true;
     protected boolean enableDecluttering = false;
+    protected boolean enableLabelPicking = false;
+    protected boolean alwaysOnTop = false;
 
     // Values computed once per frame and reused during the frame as needed.
     protected long frameNumber = -1; // identifies frame used to calculate these values
@@ -162,8 +188,6 @@ public class PointPlacemark extends WWObjectImpl
     protected double dx; // offsets needed to position image relative to the placemark position
     protected double dy;
     protected Layer pickLayer; // shape's layer when ordered renderable was created
-    protected Rectangle2D labelBounds; // cached label bounds
-    protected Font boundsFont; // the font associated with the cached label bounds
 
     protected PickSupport pickSupport = new PickSupport();
 
@@ -446,7 +470,7 @@ public class PointPlacemark extends WWObjectImpl
      * picking.
      *
      * @return the object used as the pickable object returned during picking, or null to indicate the the placemark is
-     *         returned during picking.
+     * returned during picking.
      */
     public Object getDelegateOwner()
     {
@@ -489,7 +513,7 @@ public class PointPlacemark extends WWObjectImpl
      * Indicates whether this placemark is shown if it is beyond the horizon.
      *
      * @return the value of the clip-to-horizon flag. {@code true} if horizon clipping is enabled, otherwise {@code
-     *         false}. The default value is {@code true}.
+     * false}. The default value is {@code true}.
      */
     public boolean isClipToHorizon()
     {
@@ -511,7 +535,7 @@ public class PointPlacemark extends WWObjectImpl
      * Indicates whether this placemark participates in global text decluttering.
      *
      * @return {@code true} if this placemark participates in global text decluttering, otherwise false. The default
-     *         value is {@code false}. Only the placemark's label is considered during decluttering.
+     * value is {@code false}. Only the placemark's label is considered during decluttering.
      */
     public boolean isEnableDecluttering()
     {
@@ -531,6 +555,49 @@ public class PointPlacemark extends WWObjectImpl
     }
 
     /**
+     * Indicates whether picking considers this placemark's label.
+     *
+     * @return <code>true</code> if this placemark's label is considered during picking, otherwise <code>false</code>.
+     */
+    public boolean isEnableLabelPicking()
+    {
+        return enableLabelPicking;
+    }
+
+    /**
+     * Specifies whether this placemark's label should be considered during picking. The default is not to consider the
+     * placemark's label during picking.
+     *
+     * @param enableLabelPicking <code>true</code> to consider the label during picking, otherwise <code>false</code>.
+     */
+    public void setEnableLabelPicking(boolean enableLabelPicking)
+    {
+        this.enableLabelPicking = enableLabelPicking;
+    }
+
+    /**
+     * Indicates the state of this placemark's always-on-top flag.
+     *
+     * @return <code>true</code> if the always-on-top flag is set, otherwise <code>false</code>.
+     */
+    public boolean isAlwaysOnTop()
+    {
+        return alwaysOnTop;
+    }
+
+    /**
+     * Specifies whether this placemark should appear on top of other placemarks and shapes in the scene. If the flag is
+     * <code>true</code>, this placemark's eye distance is set to 0 so that it will appear visually above other shapes
+     * whose eye distance is greater than 0.
+     *
+     * @param alwaysOnTop <code>true</code> if the placemark should appear always on top, otherwise <code>false</code>.
+     */
+    public void setAlwaysOnTop(boolean alwaysOnTop)
+    {
+        this.alwaysOnTop = alwaysOnTop;
+    }
+
+    /**
      * Indicates whether a point should be drawn when the active texture is null.
      *
      * @param dc the current draw context.
@@ -540,7 +607,8 @@ public class PointPlacemark extends WWObjectImpl
     @SuppressWarnings({"UnusedParameters"})
     protected boolean isDrawPoint(DrawContext dc)
     {
-        return this.activeTexture == null && this.getActiveAttributes().isUsePointAsDefaultImage();
+        return this.activeTexture == null && this.getActiveAttributes().isUsePointAsDefaultImage()
+            && this.getActiveAttributes().isDrawImage();
     }
 
     public void pick(DrawContext dc, Point pickPoint, OrderedPlacemark opm)
@@ -577,6 +645,13 @@ public class PointPlacemark extends WWObjectImpl
 
         if (!this.isVisible())
             return;
+
+        if (dc.is2DGlobe())
+        {
+            Sector limits = ((Globe2D)dc.getGlobe()).getProjection().getProjectionLimits();
+            if (limits != null && !limits.contains(this.getPosition()))
+                return;
+        }
 
         this.makeOrderedRenderable(dc);
     }
@@ -629,6 +704,8 @@ public class PointPlacemark extends WWObjectImpl
                 return;
         }
 
+        this.computeImageBounds(dc, opm);
+
         if (this.intersectsFrustum(dc, opm) || this.isDrawLine(dc, opm))
         {
             dc.addOrderedRenderable(opm); // add the image ordered renderable
@@ -657,14 +734,29 @@ public class PointPlacemark extends WWObjectImpl
             return false;
         }
 
-        Rectangle rect = this.computeImageRectangle(dc, opm);
+        Rectangle rect = opm.getImageBounds();
         if (dc.isPickingMode())
         {
-            // Test image rect against pick frustums. Note that we do this even when the label is visible and the image
-            // is not because we do not support picking via the label.
-            return dc.getPickFrustums().intersectsAny(rect);
+            if (this.isEnableDecluttering())
+            {
+                // If decluttering then we need everything within the viewport drawn.
+                return view.getViewport().intersects(rect);
+            }
+            else
+            {
+                // Test image rect against pick frustums.
+                if (dc.getPickFrustums().intersectsAny(rect))
+                    return true;
+
+                if (this.getLabelText() != null && this.isEnableLabelPicking())
+                {
+                    rect = this.getLabelBounds(dc, opm);
+                    if (dc.getPickFrustums().intersectsAny(rect))
+                        return true;
+                }
+            }
         }
-        else if (rect.width > 0)
+        else if (rect.getWidth() > 0)
         {
             return view.getViewport().intersects(rect);
         }
@@ -903,8 +995,11 @@ public class PointPlacemark extends WWObjectImpl
 //            gl.glDisable(GL.GL_TEXTURE_2D);
 //            dc.drawUnitQuadOutline(); // for debugging label placement
 
-            if (this.mustDrawLabel() && !dc.isPickingMode()) // don't pick via the label
-                this.drawLabel(dc, opm);
+            if (this.mustDrawLabel())
+            {
+                if (!dc.isPickingMode() || this.isEnableLabelPicking())
+                    this.drawLabel(dc, pickCandidates, opm);
+            }
         }
         finally
         {
@@ -942,66 +1037,44 @@ public class PointPlacemark extends WWObjectImpl
      */
     protected boolean mustDrawLabel()
     {
-        return this.labelText != null;
+        return this.getLabelText() != null && this.getActiveAttributes().isDrawLabel();
     }
 
     /**
      * Determines the screen coordinate boundaries of this placemark's label.
      *
-     * @param dc the current draw context.
+     * @param dc  the current draw context.
+     * @param opm the ordered renderable for the placemark.
      *
-     * @return the label bounds, in lower-left origin screen coordinates.
+     * @return the label bounds, in lower-left origin screen coordinates, or null if there is no label.
      */
-    protected Rectangle2D getLabelBounds(DrawContext dc, OrderedPlacemark opm)
+    protected Rectangle getLabelBounds(DrawContext dc, OrderedPlacemark opm)
     {
-        if (this.labelText == null)
+        if (this.getLabelText() == null)
             return null;
 
-        double x = (float) (opm.screenPoint.x + this.dx);
-        double y = (float) (opm.screenPoint.y + this.dy);
-
-        Double imageScale = this.getActiveAttributes().getScale();
-        Offset os = this.getActiveAttributes().getLabelOffset();
-        if (os == null)
-            os = DEFAULT_LABEL_OFFSET_IF_UNSPECIFIED;
-
-        double w = this.activeTexture != null ? this.activeTexture.getWidth(dc) : 1;
-        double h = this.activeTexture != null ? this.activeTexture.getHeight(dc) : 1;
-        Point.Double offset = os.computeOffset(w, h, imageScale, imageScale);
-        x += offset.x;
-        y += offset.y;
+        Vec4 labelPoint = this.computeLabelPoint(dc, opm);
 
         Font font = this.getActiveAttributes().getLabelFont();
         if (font == null)
-            font = PointPlacemarkAttributes.DEFAULT_LABEL_FONT;
 
-        Rectangle2D bounds;
-        if (this.labelBounds != null && font == this.boundsFont)
-        {
-            bounds = new Rectangle.Double(x, y, this.labelBounds.getWidth(), this.labelBounds.getHeight());
-        }
-        else
-        {
-            TextRenderer textRenderer = OGLTextRenderer.getOrCreateTextRenderer(dc.getTextRendererCache(), font);
-            bounds = textRenderer.getBounds(this.labelText);
-            this.boundsFont = font;
-            this.labelBounds = bounds;
-        }
+            font = PointPlacemarkAttributes.DEFAULT_LABEL_FONT;
+        TextRenderer textRenderer = OGLTextRenderer.getOrCreateTextRenderer(dc.getTextRendererCache(), font);
+        Rectangle2D bounds = textRenderer.getBounds(this.getLabelText());
+        double width = bounds.getWidth();
+        double height = bounds.getHeight();
 
         Double labelScale = this.getActiveAttributes().getLabelScale();
         if (labelScale != null)
         {
-            double tw = labelScale * bounds.getWidth();
-            double th = labelScale * bounds.getHeight();
-
-            bounds = new Rectangle2D.Double(x, y, tw, th);
-        }
-        else
-        {
-            bounds = new Rectangle2D.Double(x, y, bounds.getWidth(), bounds.getHeight());
+            width *= labelScale;
+            height *= labelScale;
         }
 
-        return bounds;
+        // Shift the rectangle down half of the descent. Why half? Because empirically that's what aligns the
+        // rectangle with the base of the text.
+        int y = (int) (labelPoint.getY() + bounds.getY() / 2);
+        return new Rectangle((int) labelPoint.x, y, (int) Math.ceil(width), (int) Math.ceil(height));
     }
 
     /**
@@ -1009,9 +1082,9 @@ public class PointPlacemark extends WWObjectImpl
      *
      * @param dc the current draw context.
      */
-    protected void drawLabel(DrawContext dc, OrderedPlacemark opm)
+    protected void drawLabel(DrawContext dc, PickSupport pickCandidates, OrderedPlacemark opm)
     {
-        if (this.labelText == null)
+        if (this.getLabelText() == null)
             return;
 
         Color color = this.getActiveAttributes().getLabelColor();
@@ -1028,22 +1101,9 @@ public class PointPlacemark extends WWObjectImpl
         // for BLACK to avoid creating a new background color every frame.
         Color backgroundColor = (color.getAlpha() < 255 ? new Color(0, 0, 0, color.getAlpha()) : Color.BLACK);
 
-        Font font = this.getActiveAttributes().getLabelFont();
-        if (font == null)
-            font = PointPlacemarkAttributes.DEFAULT_LABEL_FONT;
-
-        float x = (float) (opm.screenPoint.x + this.dx);
-        float y = (float) (opm.screenPoint.y + this.dy);
-
-        Double imageScale = this.getActiveAttributes().getScale();
-        Offset os = this.getActiveAttributes().getLabelOffset();
-        if (os == null)
-            os = DEFAULT_LABEL_OFFSET_IF_UNSPECIFIED;
-        double w = this.activeTexture != null ? this.activeTexture.getWidth(dc) : 1;
-        double h = this.activeTexture != null ? this.activeTexture.getHeight(dc) : 1;
-        Point.Double offset = os.computeOffset(w, h, imageScale, imageScale);
-        x += offset.x;
-        y += offset.y;
+        Vec4 labelPoint = this.computeLabelPoint(dc, opm);
+        float x = (float) labelPoint.x;
+        float y = (float) labelPoint.y;
 
         GL2 gl = dc.getGL().getGL2(); // GL initialization checks for GL2 compatibility.
 
@@ -1062,18 +1122,42 @@ public class PointPlacemark extends WWObjectImpl
         gl.glDisable(GL.GL_DEPTH_TEST);
         gl.glDepthMask(false);
 
-        TextRenderer textRenderer = OGLTextRenderer.getOrCreateTextRenderer(dc.getTextRendererCache(), font);
-        try
+        Font font = this.getActiveAttributes().getLabelFont();
+        if (font == null)
+            font = PointPlacemarkAttributes.DEFAULT_LABEL_FONT;
+
+        if (dc.isPickingMode())
         {
-            textRenderer.begin3DRendering();
-            textRenderer.setColor(backgroundColor);
-            textRenderer.draw3D(this.labelText, x + 1, y - 1, 0, 1);
-            textRenderer.setColor(color);
-            textRenderer.draw3D(this.labelText, x, y, 0, 1);
+            // Pick the text box, not just the text.
+
+            Rectangle textBounds = this.getLabelBounds(dc, opm);
+
+            Color pickColor = dc.getUniquePickColor();
+            PickedObject po = this.createPickedObject(dc, pickColor);
+            po.setValue(AVKey.PICKED_OBJECT_ID, AVKey.LABEL);
+            pickCandidates.addPickableObject(po);
+            gl.glColor3ub((byte) pickColor.getRed(), (byte) pickColor.getGreen(), (byte) pickColor.getBlue());
+
+            gl.glTranslated(textBounds.getX(), textBounds.getY(), 0);
+            gl.glScaled(textBounds.getWidth(), textBounds.getHeight(), 1);
+            gl.glDisable(GL.GL_TEXTURE_2D);
+            dc.drawUnitQuad();
         }
-        finally
+        else
         {
-            textRenderer.end3DRendering();
+            TextRenderer textRenderer = OGLTextRenderer.getOrCreateTextRenderer(dc.getTextRendererCache(), font);
+            try
+            {
+                textRenderer.begin3DRendering();
+                textRenderer.setColor(backgroundColor);
+                textRenderer.draw3D(this.getLabelText(), x + 1, y - 1, 0, 1);
+                textRenderer.setColor(color);
+                textRenderer.draw3D(this.getLabelText(), x, y, 0, 1);
+            }
+            finally
+            {
+                textRenderer.end3DRendering();
+            }
         }
     }
 
@@ -1156,8 +1240,11 @@ public class PointPlacemark extends WWObjectImpl
 
             gl.glDepthRange(0, 1); // reset depth range to the OGL default
 
-            if (!dc.isPickingMode()) // don't pick via the label
-                this.drawLabel(dc, opm);
+            if (this.mustDrawLabel())
+            {
+                if (!dc.isPickingMode() || this.isEnableLabelPicking())
+                    this.drawLabel(dc, pickCandidates, opm);
+            }
         }
         finally
         {
@@ -1257,7 +1344,9 @@ public class PointPlacemark extends WWObjectImpl
         else
         {
             Color pickColor = dc.getUniquePickColor();
-            pickCandidates.addPickableObject(pickColor.getRGB(), this, this.getPosition());
+            Object delegateOwner = this.getDelegateOwner();
+            pickCandidates.addPickableObject(pickColor.getRGB(), delegateOwner != null ? delegateOwner : this,
+                this.getPosition());
             gl.glColor3ub((byte) pickColor.getRed(), (byte) pickColor.getGreen(), (byte) pickColor.getBlue());
         }
     }
@@ -1340,6 +1429,22 @@ public class PointPlacemark extends WWObjectImpl
      */
     protected WWTexture chooseTexture(PointPlacemarkAttributes attrs)
     {
+        if (!attrs.isDrawImage())
+        {
+            WWTexture texture = this.textures.get(TRANSPARENT_IMAGE_ADDRESS);
+            if (texture == null)
+            {
+                URL localUrl = WorldWind.getDataFileStore().requestFile(TRANSPARENT_IMAGE_ADDRESS);
+                if (localUrl != null)
+                {
+                    texture = new BasicWWTexture(localUrl, true);
+                    this.textures.put(TRANSPARENT_IMAGE_ADDRESS, texture);
+                }
+            }
+
+            return texture;
+        }
+
         if (!WWUtil.isEmpty(attrs.getImageAddress()))
         {
             WWTexture texture = this.textures.get(attrs.getImageAddress());
@@ -1384,26 +1489,23 @@ public class PointPlacemark extends WWObjectImpl
      * @param address Path or URL to the image to load into a texture.
      *
      * @return The new texture, or null if the texture could not be created because the resource is not yet available
-     *         locally.
+     * locally.
      */
     protected WWTexture initializeTexture(String address)
     {
+        if (this.getActiveAttributes().getImage() != null)
+        {
+            // App has specified a buffered image.
+            return new BasicWWTexture(this.getActiveAttributes().getImage(), true);
+        }
+
         URL localUrl = WorldWind.getDataFileStore().requestFile(address);
 
-        // WWJ-434 (http://issues.worldwind.arc.nasa.gov/jira/browse/WWJ-434) includes a stack trace showing HTTP
-        // access from BasicWWTexture on the EDT. This should not occur and I (tag) can find no path through the
-        // code that would cause it. Nevertheless, I've added guard code here to prevent anything other than a file
-        // based URL to be passed to the BasicWWTexture constructor.
         if (localUrl != null)
         {
-//            if (!"file".equals(localUrl.getProtocol()))
-//            {
-//                Logging.logger().warning(Logging.getMessage("generic.URLProtocolNotFile", localUrl));
-//                return null;
-//            }
-
             return new BasicWWTexture(localUrl, true);
         }
+
         return null;
     }
 
@@ -1448,26 +1550,24 @@ public class PointPlacemark extends WWObjectImpl
 
         // Compute the placemark point's screen location.
         opm.screenPoint = dc.getView().project(opm.placePoint);
-        opm.eyeDistance = opm.placePoint.distanceTo3(dc.getView().getEyePoint());
+        opm.eyeDistance = this.isAlwaysOnTop() ? 0 : opm.placePoint.distanceTo3(dc.getView().getEyePoint());
 
-        if (dc.isPickingMode())
-        {
-            // Cache the computed values for use in the draw phase.
-            this.placePoint = opm.placePoint;
-            this.screenPoint = opm.screenPoint;
-            this.terrainPoint = opm.terrainPoint;
-            this.eyeDistance = opm.eyeDistance;
-        }
+        // Cache the computed values for subsequent use in this frame.
+        this.placePoint = opm.placePoint;
+        this.screenPoint = opm.screenPoint;
+        this.terrainPoint = opm.terrainPoint;
+        this.eyeDistance = opm.eyeDistance;
     }
 
     /**
      * Computes the screen-space rectangle bounding the placemark image.
      *
-     * @param dc the current draw context.
+     * @param dc  the current draw context.
+     * @param opm the ordered placemark.
      *
      * @return the bounding rectangle.
      */
-    protected Rectangle computeImageRectangle(DrawContext dc, OrderedPlacemark opm)
+    protected void computeImageBounds(DrawContext dc, OrderedPlacemark opm)
     {
         double s = this.getActiveAttributes().getScale() != null ? this.getActiveAttributes().getScale() : 1;
 
@@ -1477,7 +1577,36 @@ public class PointPlacemark extends WWObjectImpl
         double x = opm.screenPoint.x + (this.isDrawPoint(dc) ? -0.5 * s : this.dx);
         double y = opm.screenPoint.y + (this.isDrawPoint(dc) ? -0.5 * s : this.dy);
 
-        return new Rectangle((int) x, (int) y, (int) Math.ceil(width), (int) Math.ceil(height));
+        opm.imageBounds = new Rectangle((int) x, (int) y, (int) Math.ceil(width), (int) Math.ceil(height));
+    }
+
+    /**
+     * Computes the screen coordinate (lower-left origin) location of this placemark's label.
+     *
+     * @param dc  the current draw context.
+     * @param opm the ordered renderable for the placemark.
+     *
+     * @return the 2D label location, or null if there is no label.
+     */
+    protected Vec4 computeLabelPoint(DrawContext dc, OrderedPlacemark opm)
+    {
+        if (this.getLabelText() == null)
+            return null;
+
+        float x = (float) (opm.screenPoint.x + this.dx);
+        float y = (float) (opm.screenPoint.y + this.dy);
+
+        Double imageScale = this.getActiveAttributes().getScale();
+        Offset os = this.getActiveAttributes().getLabelOffset();
+        if (os == null)
+            os = DEFAULT_LABEL_OFFSET_IF_UNSPECIFIED;
+        double w = this.activeTexture != null ? this.activeTexture.getWidth(dc) : 1;
+        double h = this.activeTexture != null ? this.activeTexture.getHeight(dc) : 1;
+        Point.Double offset = os.computeOffset(w, h, imageScale, imageScale);
+        x += offset.x;
+        y += offset.y;
+
+        return new Vec4(x, y);
     }
 
     protected void computeImageOffset(DrawContext dc)
