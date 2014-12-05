@@ -34,7 +34,7 @@ panel.add(wwd, java.awt.BorderLayout.CENTER);
 
 You can view/download a sample application from the [world-wind-java-sdk-rcp-sample](https://github.com/unofficial-nasa/world-wind-java-sdk-rcp-sample) project.
 
-![](https://raw2.github.com/unofficial-nasa/world-wind-java-sdk/gh-pages/SampleWorldWindImage.png)
+![](https://raw.githubusercontent.com/unofficial-nasa/world-wind-java-sdk/gh-pages/SampleWorldWindImage.png)
 
 # Why Use this Cloned Repository?
  * Eclipse-Ready Project
