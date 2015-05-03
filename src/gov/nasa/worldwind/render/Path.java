@@ -163,8 +163,8 @@ public class Path extends AbstractShape
          */
         protected IntBuffer path2DIndices;
         /**
-         * Indices of the tessellated positions at which new lines must be formed rather than continuing the
-         * previous line. Used only when the path's positions span the dateline and a 2D globe is being used.
+         * Indices of the tessellated positions at which new lines must be formed rather than continuing the previous
+         * line. Used only when the path's positions span the dateline and a 2D globe is being used.
          */
         protected ArrayList<Integer> splitPositions;
         /** Indicates whether the rendered path has extrusion points in addition to path points. */
@@ -350,7 +350,7 @@ public class Path extends AbstractShape
          * Specifies the number of vertices in <code>renderedPath</code>. Specify 0 if <code>renderedPath</code>
          * contains no vertices.
          *
-         * @param count the the number of verices in <code>renderedPath</code>.
+         * @param count the the number of vertices in <code>renderedPath</code>.
          */
         public void setVertexCount(int count)
         {
@@ -362,9 +362,18 @@ public class Path extends AbstractShape
     protected SurfaceShape createSurfaceShape()
     {
         SurfacePolyline polyline = new SurfacePolyline();
-        polyline.setLocations(this.getPositions());
+        if (this.getPositions() != null)
+            polyline.setLocations(this.getPositions());
 
         return polyline;
+    }
+
+    @Override
+    protected void updateSurfaceShape()
+    {
+        super.updateSurfaceShape();
+
+        this.surfaceShape.setPathType(this.getPathType());
     }
 
     /**
@@ -680,7 +689,7 @@ public class Path extends AbstractShape
         this.followTerrain = source.followTerrain;
         this.extrude = source.extrude;
         this.terrainConformance = source.terrainConformance;
-        this. numSubsegments = source.numSubsegments;
+        this.numSubsegments = source.numSubsegments;
         this.drawVerticals = source.drawVerticals;
         this.showPositions = source.showPositions;
         this.showPositionsThreshold = source.showPositionsThreshold;
@@ -2207,16 +2216,14 @@ public class Path extends AbstractShape
             else
                 p += arcLength / this.numSubsegments;
 
+            if (arcLength < p || arcLength - p < 1e-9)
+                break; // position is either beyond the arc length or the remaining distance is in millimeters on Earth
+
             Position pos;
             Color color;
-
             s = p / arcLength;
-            if (s >= 1)
-            {
-                pos = posB;
-                color = colorB;
-            }
-            else if (this.pathType == AVKey.LINEAR)
+
+            if (this.pathType == AVKey.LINEAR)
             {
                 if (segmentAzimuth == null)
                 {
@@ -2253,10 +2260,12 @@ public class Path extends AbstractShape
                 color = (colorA != null && colorB != null) ? WWUtil.interpolateColor(s, colorA, colorB) : null;
             }
 
-            this.addTessellatedPosition(pos, color, s >= 1 ? ordinalB : null, pathData);
+            this.addTessellatedPosition(pos, color, null, pathData);
 
             ptA = ptB;
         }
+
+        this.addTessellatedPosition(posB, colorB, ordinalB, pathData);
     }
 
     /**
