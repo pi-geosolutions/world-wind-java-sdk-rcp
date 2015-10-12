@@ -1221,15 +1221,6 @@ public class BasicElevationModel extends AbstractElevationModel implements BulkR
         return this.lookupElevation(latitude, longitude, tile);
     }
 
-    /**
-     * Returns the elevation for this elevation model's highest level of detail if the source file for that level and
-     * the specified location exists in the local elevation cache on disk.
-     * @param latitude The latitude of the location whose elevation is desired.
-     * @param longitude The longitude of the location whose elevation is desired.
-     * @return The elevation at the specified location, if that location is contained in this elevation model and the
-     * source file for the highest-resolution elevation at that location exists in the current disk cache. Otherwise
-     * this elevation model's missing data signal is returned (see {@link #getMissingDataSignal()}).
-     */
     public double getUnmappedLocalSourceElevation(Angle latitude, Angle longitude)
     {
         if (latitude == null || longitude == null)
@@ -1613,7 +1604,7 @@ public class BasicElevationModel extends AbstractElevationModel implements BulkR
         // Set to model's limits if for some reason a limit wasn't determined
         if (min == Double.MAX_VALUE)
             min = this.getMinElevation();
-        if (max == Double.MAX_VALUE)
+        if (max == -Double.MAX_VALUE)
             max = this.getMaxElevation();
 
         return new double[] {min, max};

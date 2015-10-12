@@ -194,8 +194,6 @@ public class Polygon extends AbstractShape
     /** The total number of positions in the entire polygon. */
     protected int numPositions;
 
-    /** The image source for this shape's texture, if any. */
-    protected Object imageSource; // image source for the optional texture
     /** If an image source was specified, this is the WWTexture form. */
     protected WWTexture texture; // an optional texture for the base polygon
     /** This shape's rotation, in degrees positive counterclockwise. */
@@ -434,7 +432,7 @@ public class Polygon extends AbstractShape
      */
     public Object getTextureImageSource()
     {
-        return this.imageSource;
+        return this.getTexture() != null ? this.getTexture().getImageSource() : null;
     }
 
     /**
@@ -460,6 +458,7 @@ public class Polygon extends AbstractShape
 
         float[] retCoords = new float[this.textureCoordsBuffer.limit()];
         this.textureCoordsBuffer.get(retCoords, 0, retCoords.length);
+        this.textureCoordsBuffer.rewind();
 
         return retCoords;
     }
@@ -483,6 +482,10 @@ public class Polygon extends AbstractShape
         {
             this.texture = null;
             this.textureCoordsBuffer = null;
+
+            if (this.surfaceShape != null)
+                this.setSurfacePolygonTexImageSource(this.surfaceShape);
+
             return;
         }
 
@@ -500,8 +503,7 @@ public class Polygon extends AbstractShape
             throw new IllegalArgumentException(message);
         }
 
-        this.imageSource = imageSource;
-        this.texture = this.makeTexture(this.imageSource);
+        this.texture = this.makeTexture(imageSource);
 
         // Determine whether the tex-coord list needs to be closed.
         boolean closeIt = texCoords[0] != texCoords[texCoordCount - 2] || texCoords[1] != texCoords[texCoordCount - 1];
@@ -527,6 +529,11 @@ public class Polygon extends AbstractShape
             this.textureCoordsBuffer.put(this.textureCoordsBuffer.get(0));
             this.textureCoordsBuffer.put(this.textureCoordsBuffer.get(1));
         }
+
+        this.textureCoordsBuffer.rewind();
+
+        if (this.surfaceShape != null)
+            this.setSurfacePolygonTexImageSource(this.surfaceShape);
     }
 
     public Position getReferencePosition()
@@ -566,6 +573,7 @@ public class Polygon extends AbstractShape
     {
         SurfacePolygon polygon = new SurfacePolygon();
         this.setSurfacePolygonBoundaries(polygon);
+        this.setSurfacePolygonTexImageSource(polygon);
 
         return polygon;
     }
@@ -581,6 +589,15 @@ public class Polygon extends AbstractShape
         {
             polygon.addInnerBoundary(bounds.get(i));
         }
+    }
+
+    protected void setSurfacePolygonTexImageSource(SurfaceShape shape)
+    {
+        SurfacePolygon polygon = (SurfacePolygon) shape;
+
+        float[] texCoords = this.getTextureCoords();
+        int texCoordCount = texCoords != null ? texCoords.length / 2 : 0;
+        polygon.setTextureImageSource(this.getTextureImageSource(), texCoords, texCoordCount);
     }
 
     public Extent getExtent(Globe globe, double verticalExaggeration)
